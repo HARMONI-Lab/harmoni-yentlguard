@@ -10,15 +10,9 @@ This lets you compare ΔM distributions before and after intervention
 with a simple WHERE pass_number = 1 / 2 filter.
 """
 
-import json
 import logging
 import uuid
-import tempfile
-import os
-import re
 from datetime import datetime, timezone
-from typing import Sequence
-
 from google.cloud import bigquery
 
 from yentlguard.agent.runner import VignetteRun
@@ -35,12 +29,10 @@ def _model_family(model_version: str) -> str:
     gemini-3.1-pro     → gemini-3.1
     gemini-3.5-pro     → gemini-3.5   (ready when it drops)
     """
-    # Matches 'gemini-2.5-pro', 'gemini-3.1-flash', etc -> 'gemini-2.5', 'gemini-3.1'
-    match = re.match(r"^(gemini-\d+\.\d+)", model_version)
-    if match:
-        return match.group(1)
-        
-    # Fallback for 'gemini-experimental', 'llama-3', etc.
+    parts = model_version.split("-")
+    # Format: gemini-{major}.{minor}-{variant}
+    if len(parts) >= 3:
+        return f"{parts[0]}-{parts[1]}"
     return model_version
 
 
@@ -222,11 +214,10 @@ def run_to_rows(
 
 class BQWriter:
     """
-    Streams VignetteRun results into a local temporary file, then batch loads
-    into BigQuery at the end of the run.
+    Streams VignetteRun results into BigQuery after each vignette.
 
-    Designed for stability and performance: batch load jobs are more robust,
-    faster, and free compared to legacy streaming inserts.
+    Designed for research use: inserts are streaming (not batch load jobs)
+    so you can query results in BigQuery while a run is still in progress.
 
     Parameters
     ----------
@@ -247,7 +238,8 @@ class BQWriter:
         self.run_id = run_id
         self.gate_threshold = gate_threshold
         self._client = client or bigquery.Client(project=GCP_PROJECT_ID)
-        self._temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8')
+        self._buffer: list[dict] = []
+        self._buffer_size = 50  # flush every N rows
 
     def write(
         self,
@@ -256,7 +248,8 @@ class BQWriter:
         clinical_category: str | None = None,
     ) -> None:
         """
-        Convert a completed VignetteRun to rows and append to the JSONL temp file.
+        Convert a completed VignetteRun to rows and add to the write buffer.
+        Flushes automatically when buffer reaches _buffer_size.
         """
         rows = run_to_rows(
             run=run,
@@ -265,12 +258,27 @@ class BQWriter:
             clinical_category=clinical_category,
             gate_threshold=self.gate_threshold,
         )
-        for row in rows:
-            self._temp_file.write(json.dumps(row) + "\n")
+        self._buffer.extend(rows)
+
+        if len(self._buffer) >= self._buffer_size:
+            self.flush()
 
     def flush(self) -> None:
-        """Force-write (flush) the local file buffer."""
-        self._temp_file.flush()
+        """Force-write all buffered rows to BigQuery."""
+        if not self._buffer:
+            return
+
+        errors = self._client.insert_rows_json(RUNS_TABLE, self._buffer)
+        if errors:
+            logger.error("BigQuery insert errors: %s", errors)
+        else:
+            logger.info(
+                "BQWriter: flushed %d rows to %s (run_id=%s)",
+                len(self._buffer),
+                RUNS_TABLE,
+                self.run_id,
+            )
+        self._buffer.clear()
 
     def register_experiment(
         self,
@@ -305,12 +313,6 @@ class BQWriter:
         errors = self._client.insert_rows_json(EXPTS_TABLE, [row])
         if errors:
             logger.error("Experiment registration failed: %s", errors)
-            dlq_dir = "failed_loads"
-            os.makedirs(dlq_dir, exist_ok=True)
-            dlq_path = os.path.join(dlq_dir, f"yentlguard_experiment_{self.run_id}.json")
-            with open(dlq_path, "w") as f:
-                json.dump(row, f)
-            logger.critical("CRITICAL: Experiment registration failed. Metadata safely preserved at %s", dlq_path)
         else:
             logger.info(
                 "Experiment registered: run_id=%s label='%s'",
@@ -322,32 +324,7 @@ class BQWriter:
         return self
 
     def __exit__(self, *_) -> None:
-        self._temp_file.close()
-        try:
-            if os.path.getsize(self._temp_file.name) > 0:
-                job_config = bigquery.LoadJobConfig(
-                    source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
-                )
-                with open(self._temp_file.name, "rb") as source_file:
-                    logger.info("Starting BigQuery batch load for run_id=%s...", self.run_id)
-                    job = self._client.load_table_from_file(
-                        source_file, RUNS_TABLE, job_config=job_config
-                    )
-                    job.result()  # Waits for the job to complete.
-                    logger.info("BigQuery load job finished. Loaded %d rows into %s.", job.output_rows, RUNS_TABLE)
-        except Exception as e:
-            logger.error("Failed to load BigQuery batch job: %s", e)
-            dlq_dir = "failed_loads"
-            os.makedirs(dlq_dir, exist_ok=True)
-            dlq_path = os.path.join(dlq_dir, f"yentlguard_run_{self.run_id}.jsonl")
-            import shutil
-            shutil.copy(self._temp_file.name, dlq_path)
-            logger.critical("CRITICAL: BigQuery load failed. Data safely preserved at %s", dlq_path)
-        finally:
-            try:
-                os.unlink(self._temp_file.name)
-            except OSError:
-                pass
+        self.flush()
 
 
 def _safe_version(package: str) -> str | None:

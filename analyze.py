@@ -58,7 +58,7 @@ class Analyzer:
 
     def _q(self, sql: str, params: list | None = None) -> pd.DataFrame:
         cfg = bigquery.QueryJobConfig(query_parameters=params or [])
-        return self._bq.query(sql, job_config=cfg).to_dataframe(create_bqstorage_client=True)
+        return self._bq.query(sql, job_config=cfg).to_dataframe()
 
     def _run_ids_param(self, run_ids: list[str]):
         return bigquery.ArrayQueryParameter("run_ids", "STRING", run_ids)
@@ -89,21 +89,20 @@ class Analyzer:
         )
 
     def _fetch_run_labels(self, run_ids: list[str]) -> dict[str, str]:
-        sql = """
-            SELECT run_id, label FROM `{expts_table}` WHERE run_id IN UNNEST(@run_ids)
-        """.format(expts_table=EXPTS_TABLE)
-        df = self._q(sql, [self._run_ids_param(run_ids)])
+        df = self._q(
+            f"SELECT run_id, label FROM `{EXPTS_TABLE}` WHERE run_id IN UNNEST(@run_ids)",
+            [self._run_ids_param(run_ids)],
+        )
         return dict(zip(df["run_id"], df["label"])) if not df.empty else {}
 
     def _fetch_raw(self, run_ids: list[str], pass_number: int) -> pd.DataFrame:
-        sql = """
-            SELECT * FROM `{runs_table}`
+        return self._q(
+            f"""
+            SELECT * FROM `{RUNS_TABLE}`
             WHERE run_id IN UNNEST(@run_ids)
               AND pass_number = @pass
             ORDER BY model_version, thinking_budget, demographic_variant, vignette_id
-        """.format(runs_table=RUNS_TABLE)
-        return self._q(
-            sql,
+            """,
             [
                 self._run_ids_param(run_ids),
                 bigquery.ScalarQueryParameter("pass", "INT64", pass_number),
@@ -111,7 +110,8 @@ class Analyzer:
         )
 
     def _compute_overview(self, run_ids: list[str]) -> pd.DataFrame:
-        sql = """
+        return self._q(
+            f"""
             SELECT
                 r.run_id,
                 e.label,
@@ -124,18 +124,20 @@ class Analyzer:
                 ROUND(AVG(CAST(r.esi_correct AS FLOAT64)), 4) AS accuracy,
                 SUM(CAST(r.gate_fired AS INT64)) AS n_gate_fired,
                 ROUND(AVG(r.crr), 4) AS mean_crr
-            FROM `{runs_table}` r
-            LEFT JOIN `{expts_table}` e USING (run_id)
+            FROM `{RUNS_TABLE}` r
+            LEFT JOIN `{EXPTS_TABLE}` e USING (run_id)
             WHERE r.run_id IN UNNEST(@run_ids)
               AND r.pass_number = 1
             GROUP BY 1, 2, 3, 4
             ORDER BY r.model_version, r.thinking_budget
-        """.format(runs_table=RUNS_TABLE, expts_table=EXPTS_TABLE)
-        return self._q(sql, [self._run_ids_param(run_ids)])
+            """,
+            [self._run_ids_param(run_ids)],
+        )
 
     def _compute_h1(self, run_ids: list[str]) -> pd.DataFrame:
         """H1: Does higher thinking budget reduce PSS?"""
-        sql = """
+        return self._q(
+            f"""
             SELECT
                 model_version,
                 model_family,
@@ -146,19 +148,21 @@ class Analyzer:
                 ROUND(STDDEV(baseline_delta_m - delta_m), 4) AS stddev_pss,
                 ROUND(AVG(tar), 4) AS mean_tar,
                 ROUND(AVG(CAST(is_high_friction AS FLOAT64)), 4) AS high_friction_rate
-            FROM `{runs_table}`
+            FROM `{RUNS_TABLE}`
             WHERE run_id IN UNNEST(@run_ids)
               AND pass_number = 1
               AND demographic_variant != 'nb_ambiguous'
               AND baseline_delta_m IS NOT NULL
             GROUP BY 1, 2, 3, 4
             ORDER BY model_family, thinking_budget, demographic_variant
-        """.format(runs_table=RUNS_TABLE)
-        return self._q(sql, [self._run_ids_param(run_ids)])
+            """,
+            [self._run_ids_param(run_ids)],
+        )
 
     def _compute_h2(self, run_ids: list[str]) -> pd.DataFrame:
         """H2: Does demographic label increase TAR (cognitive friction)?"""
-        sql = """
+        return self._q(
+            f"""
             SELECT
                 model_version,
                 clinical_category,
@@ -169,18 +173,20 @@ class Analyzer:
                 ROUND(AVG(thoughts_token_count), 1) AS mean_thought_tokens,
                 ROUND(AVG(candidates_token_count), 1) AS mean_output_tokens,
                 ROUND(AVG(CAST(is_high_friction AS FLOAT64)), 4) AS high_friction_rate
-            FROM `{runs_table}`
+            FROM `{RUNS_TABLE}`
             WHERE run_id IN UNNEST(@run_ids)
               AND pass_number = 1
               AND tar IS NOT NULL
             GROUP BY 1, 2, 3
             ORDER BY model_version, clinical_category, demographic_variant
-        """.format(runs_table=RUNS_TABLE)
-        return self._q(sql, [self._run_ids_param(run_ids)])
+            """,
+            [self._run_ids_param(run_ids)],
+        )
 
     def _compute_h3(self, run_ids: list[str]) -> pd.DataFrame:
         """H3: Does Gemini 3.1 Pro maintain wider ΔM at ESI 2↔3 boundary?"""
-        sql = """
+        return self._q(
+            f"""
             SELECT
                 model_version,
                 model_family,
@@ -194,18 +200,20 @@ class Analyzer:
                 ROUND(MAX(delta_m), 4) AS max_delta_m,
                 ROUND(AVG(CAST(is_low_confidence AS FLOAT64)), 4) AS low_confidence_rate,
                 ROUND(AVG(CAST(esi_correct AS FLOAT64)), 4) AS accuracy
-            FROM `{runs_table}`
+            FROM `{RUNS_TABLE}`
             WHERE run_id IN UNNEST(@run_ids)
               AND pass_number = 1
               AND delta_m IS NOT NULL
             GROUP BY 1, 2, 3, 4, 5
             ORDER BY model_family, thinking_budget, demographic_variant, esi_predicted
-        """.format(runs_table=RUNS_TABLE)
-        return self._q(sql, [self._run_ids_param(run_ids)])
+            """,
+            [self._run_ids_param(run_ids)],
+        )
 
     def _compute_h4(self, run_ids: list[str]) -> pd.DataFrame:
         """H4: CRR by model × variant × clinical category."""
-        sql = """
+        return self._q(
+            f"""
             SELECT
                 model_version,
                 demographic_variant,
@@ -218,18 +226,20 @@ class Analyzer:
                 COUNTIF(recovery_class = 'failed') AS n_failed,
                 ROUND(AVG(CAST(triage_changed AS FLOAT64)), 4) AS triage_change_rate,
                 ROUND(AVG(delta_m), 4) AS mean_delta_m_pass2
-            FROM `{runs_table}`
+            FROM `{RUNS_TABLE}`
             WHERE run_id IN UNNEST(@run_ids)
               AND pass_number = 2
               AND crr IS NOT NULL
             GROUP BY 1, 2, 3
             ORDER BY model_version, demographic_variant, clinical_category
-        """.format(runs_table=RUNS_TABLE)
-        return self._q(sql, [self._run_ids_param(run_ids)])
+            """,
+            [self._run_ids_param(run_ids)],
+        )
 
     def _compute_cross_model(self, run_ids: list[str]) -> pd.DataFrame:
         """Vignette-level pivot across model versions for direct comparison."""
-        sql = """
+        df = self._q(
+            f"""
             SELECT
                 vignette_id,
                 clinical_category,
@@ -244,11 +254,12 @@ class Analyzer:
                 is_low_confidence,
                 gate_fired,
                 crr
-            FROM `{runs_table}`
+            FROM `{RUNS_TABLE}`
             WHERE run_id IN UNNEST(@run_ids)
               AND pass_number = 1
-        """.format(runs_table=RUNS_TABLE)
-        df = self._q(sql, [self._run_ids_param(run_ids)])
+            """,
+            [self._run_ids_param(run_ids)],
+        )
         if df.empty:
             return df
 
@@ -276,7 +287,8 @@ class Analyzer:
         sycophantic compliance with directive prompts rather than genuine
         debiasing -- a significant methodological threat to validity.
         """
-        sql = """
+        return self._q(
+            f"""
             SELECT
                 model_version,
                 demographic_variant,
@@ -301,18 +313,20 @@ class Analyzer:
                 COUNTIF(ABS(crr_vs_distractor_gap) < 0.1) AS n_possible_sycophancy,
                 ROUND(AVG(CAST(ABS(crr_vs_distractor_gap) < 0.1 AS FLOAT64)), 4)
                     AS sycophancy_rate
-            FROM `{runs_table}`
+            FROM `{RUNS_TABLE}`
             WHERE run_id IN UNNEST(@run_ids)
               AND pass_number = 2
               AND crr IS NOT NULL
             GROUP BY 1, 2, 3
             ORDER BY mean_crr_gap ASC  -- worst gap (most likely sycophancy) first
-        """.format(runs_table=RUNS_TABLE)
-        return self._q(sql, [self._run_ids_param(run_ids)])
+            """,
+            [self._run_ids_param(run_ids)],
+        )
 
     def _compute_gate_stats(self, run_ids: list[str]) -> pd.DataFrame:
         """Gate fire rate and intervention breakdown."""
-        sql = """
+        return self._q(
+            f"""
             SELECT
                 model_version,
                 thinking_budget,
@@ -323,10 +337,11 @@ class Analyzer:
                 ROUND(AVG(CAST(gate_fired AS FLOAT64)), 4) AS gate_fire_rate,
                 ROUND(AVG(CASE WHEN gate_fired THEN delta_m END), 4) AS mean_dm_when_fired,
                 ROUND(AVG(CASE WHEN NOT gate_fired THEN delta_m END), 4) AS mean_dm_when_not_fired
-            FROM `{runs_table}`
+            FROM `{RUNS_TABLE}`
             WHERE run_id IN UNNEST(@run_ids)
               AND pass_number = 1
             GROUP BY 1, 2, 3, 4
             ORDER BY model_version, thinking_budget, gate_fire_rate DESC
-        """.format(runs_table=RUNS_TABLE)
-        return self._q(sql, [self._run_ids_param(run_ids)])
+            """,
+            [self._run_ids_param(run_ids)],
+        )

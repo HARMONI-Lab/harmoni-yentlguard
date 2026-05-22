@@ -17,15 +17,22 @@ Two responsibilities:
    │   ├── pass1.metrics (child: ΔM + TAR as attributes)
    │   │   ├── delta_m (grandchild: full logprob breakdown)
    │   │   └── tar (grandchild: token count breakdown)
-   ├── correction_gate (child: gate decision attributes)
-   ├── mcp.baseline_lookup (child: Phoenix query result)
-   ├── pass2 (generation span — auto-created by OpenInference, enriched here)
-   │   ├── pass2.metrics (child: ΔM as attributes)
-   │   │   └── delta_m (grandchild: full logprob breakdown)
-   └── crr (child: recovery rate computation)
+   ├── correction_gate (child: gate decision + threshold + demographic trigger)
+   ├── mcp.baseline_lookup (child: Phoenix MCP query result)
+   │
+   │   [Parallel Triad — all four branches spawn concurrently]
+   ├── pass2 / corrective (enriched: ΔM, pass_number=2)
+   │   └── pass2.metrics → delta_m grandchild
+   ├── pass3 / 3a Pure Clinical Anchor (enriched: ΔM, pass_number=3)
+   │   └── pass3.metrics → delta_m grandchild
+   ├── pass4 / 3b Forced Parsing Anchor (enriched: ΔM, pass_number=4)
+   │   └── pass4.metrics → delta_m grandchild
+   ├── pass5 / 3c Protocol Anchor (enriched: ΔM, pass_number=5)
+   │   └── pass5.metrics → delta_m grandchild
+   └── crr (child: corrective CRR result — distractor CRRs on BQ row, not span)
 
 This gives maximum Phoenix observability: you can slice at any level,
-from aggregate CRR down to the exact logprob of the runner-up ESI token.
+from aggregate sycophancy gap down to the exact logprob of the runner-up ESI token.
 """
 
 import logging

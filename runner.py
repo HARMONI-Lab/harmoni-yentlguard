@@ -37,7 +37,6 @@ from dataclasses import dataclass, field
 
 from google import genai
 from google.genai import types
-from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 
 from opentelemetry import trace as otel_trace
 
@@ -121,7 +120,13 @@ class VignetteRun:
 
 class YentlGuardRunner:
     """
-    Orchestrates two-pass Gemini triage runs with Phoenix MCP baseline lookup.
+    Orchestrates Parallel Triad Gemini triage runs with Phoenix MCP baseline lookup
+    and sycophancy controls.
+
+    Pass 1 runs synchronously. When the correction gate fires, four independent
+    branches execute concurrently via asyncio.gather(): the corrective re-prompt
+    and three demographically-blind distractor prompts. CRR is computed for all
+    four branches against the same nb_ambiguous baseline.
 
     Parameters
     ----------
@@ -132,8 +137,8 @@ class YentlGuardRunner:
     delta_m_threshold:
         ΔM value below which the correction gate fires. Default 1.0 nat.
     phoenix_mcp_client:
-        Configured PhoenixMCPClient for baseline ΔM lookup. If None,
-        Pass 2 will not be triggered even on low-confidence spans.
+        Configured PhoenixMCPClient for nb_ambiguous baseline ΔM lookup.
+        If None, the gate will still fire but CRR cannot be computed.
     """
 
     THINKING_BUDGETS = {
@@ -272,23 +277,12 @@ class YentlGuardRunner:
             for trigger in DEMOGRAPHIC_TRIGGER_TOKENS
         )
 
-    @retry(
-        wait=wait_exponential(min=2, max=60),
-        stop=stop_after_attempt(5),
-    )
-    async def _async_generate_content(self, prompt: str, config: types.GenerateContentConfig):
-        return await asyncio.wait_for(
-            self._client.aio.models.generate_content(
-                model=self.model_version,
-                contents=prompt,
-                config=config,
-            ),
-            timeout=120.0
-        )
-
-    async def run(self, vignette_id: str, vignette_text: str, demographic_variant: str) -> VignetteRun:
+    def run(self, vignette_id: str, vignette_text: str, demographic_variant: str) -> VignetteRun:
         """
-        Execute a full two-pass mechanistic run for one vignette × variant.
+        Execute a full mechanistic run for one vignette × variant.
+
+        Runs Pass 1 synchronously, then — if the correction gate fires —
+        spawns the Parallel Triad (corrective + 3a + 3b + 3c) concurrently.
 
         Parameters
         ----------
@@ -318,8 +312,9 @@ class YentlGuardRunner:
             # ── Pass 1 ────────────────────────────────────────────────────────
             logger.info("[%s/%s] Pass 1 → %s", vignette_id, demographic_variant, self.model_version)
             try:
-                response1 = await self._async_generate_content(
-                    prompt=vignette_text,
+                response1 = self._client.models.generate_content(
+                    model=self.model_version,
+                    contents=vignette_text,
                     config=config,
                 )
                 run.raw_text_pass1 = response1.text or ""
@@ -445,12 +440,14 @@ class YentlGuardRunner:
                 "3c":         self._build_distractor_c(vignette_text),
             }
 
-            branch_results = await self._run_parallel_branches(
-                branches=branches,
-                config=config,
-                vignette_id=vignette_id,
-                demographic_variant=demographic_variant,
-                run=run,
+            branch_results = asyncio.run(
+                self._run_parallel_branches(
+                    branches=branches,
+                    config=config,
+                    vignette_id=vignette_id,
+                    demographic_variant=demographic_variant,
+                    run=run,
+                )
             )
 
             # ── Store corrective branch results ───────────────────────────────
@@ -521,9 +518,15 @@ class YentlGuardRunner:
                     "[%s/%s] Branch %s -- calling Vertex AI",
                     vignette_id, demographic_variant, label,
                 )
-                response = await self._async_generate_content(
-                    prompt=prompt,
-                    config=config,
+                # google-genai async support via asyncio executor
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self._client.models.generate_content(
+                        model=self.model_version,
+                        contents=prompt,
+                        config=config,
+                    )
                 )
                 raw_text  = response.text or ""
                 dm_result = compute_delta_m(response)

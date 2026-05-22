@@ -57,6 +57,9 @@ dependencies = [
 
     # MCP
     "mcp>=1.0.0",
+
+    # Resiliency
+    "tenacity>=8.2.0",
 ]
 
 [project.optional-dependencies]

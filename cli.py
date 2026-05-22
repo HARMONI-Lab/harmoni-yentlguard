@@ -34,6 +34,20 @@ Usage:
 import argparse
 import logging
 import sys
+import uuid
+import asyncio
+from pathlib import Path
+from datetime import datetime, timezone
+
+from yentlguard.telemetry.phoenix import setup_phoenix_tracing
+from yentlguard.agent.runner import YentlGuardRunner
+from yentlguard.mcp.phoenix_client import PhoenixMCPClient
+from yentlguard.eval.bq_writer import BQWriter
+from yentlguard.eval.analyze import Analyzer
+from yentlguard.eval.report import generate_html_report
+from yentlguard.eval.export import export_csvs
+from yentlguard.eval.agent_builder import AgentBuilderEvalLayer
+from yentlbench.data import load_vignettes
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,9 +58,6 @@ logger = logging.getLogger("yentlguard.cli")
 
 def cmd_baseline(args: argparse.Namespace) -> None:
     """Populate Phoenix with nb_ambiguous baseline spans."""
-    from yentlguard.telemetry.phoenix import setup_phoenix_tracing
-    from yentlguard.agent.runner import YentlGuardRunner
-
     logger.info("Initializing Phoenix tracing...")
     setup_phoenix_tracing()
 
@@ -57,37 +68,41 @@ def cmd_baseline(args: argparse.Namespace) -> None:
     )
 
     # Load vignettes from YentlBench
-    from yentlbench.data import load_vignettes
     vignettes = load_vignettes(variant="nb_ambiguous")
     logger.info("Loaded %d nb_ambiguous vignettes from YentlBench.", len(vignettes))
 
-    for v in vignettes:
-        run = runner.run(
-            vignette_id=v.vignette_id,
-            vignette_text=v.text,
-            demographic_variant="nb_ambiguous",
-        )
-        status = "✓" if not run.errors else "✗"
-        dm = run.pass1_delta_m.delta_m if run.pass1_delta_m and run.pass1_delta_m.delta_m else None
-        logger.info(
-            "%s %s | ESI=%s | ΔM=%.4f",
-            status,
-            v.vignette_id,
-            run.pass1_esi or "?",
-            dm or 0.0,
-        )
+    async def _async_cmd_baseline():
+        semaphore = asyncio.Semaphore(args.concurrency)
+        tasks = []
+
+        for v in vignettes:
+            async def _process(v=v):
+                async with semaphore:
+                    run = await runner.run(
+                        vignette_id=v.vignette_id,
+                        vignette_text=v.text,
+                        demographic_variant="nb_ambiguous",
+                    )
+                    status = "✓" if not run.errors else "✗"
+                    dm = run.pass1_delta_m.delta_m if run.pass1_delta_m and run.pass1_delta_m.delta_m else None
+                    logger.info(
+                        "%s %s | ESI=%s | ΔM=%.4f",
+                        status,
+                        v.vignette_id,
+                        run.pass1_esi or "?",
+                        dm or 0.0,
+                    )
+            tasks.append(_process())
+
+        await asyncio.gather(*tasks)
+
+    asyncio.run(_async_cmd_baseline())
 
     logger.info("Baseline run complete. Spans available in Phoenix project: yentlguard")
 
 
 def cmd_run(args: argparse.Namespace) -> None:
     """Execute two-pass mechanistic runs for specified variants."""
-    import uuid
-    from yentlguard.telemetry.phoenix import setup_phoenix_tracing
-    from yentlguard.agent.runner import YentlGuardRunner
-    from yentlguard.mcp.phoenix_client import PhoenixMCPClient
-    from yentlguard.eval.bq_writer import BQWriter
-
     setup_phoenix_tracing()
 
     mcp_client = PhoenixMCPClient(mcp_endpoint=args.phoenix_mcp_endpoint)
@@ -95,55 +110,67 @@ def cmd_run(args: argparse.Namespace) -> None:
     run_id = args.run_id or str(uuid.uuid4())
     logger.info("Experiment run_id: %s", run_id)
 
-    from yentlbench.data import load_vignettes
+    if not getattr(args, "variants", None):
+        logger.error("No demographic variants specified. Aborting run.")
+        return
+
     all_vignettes = load_vignettes(variant=args.variants[0])  # count for registration
 
-    with BQWriter(run_id=run_id, gate_threshold=args.threshold) as bq:
+    async def _async_cmd_run():
+        semaphore = asyncio.Semaphore(args.concurrency)
 
-        bq.register_experiment(
-            label=args.label or f"{args.model} {','.join(args.budget)} {','.join(args.variants)}",
-            models=[args.model],
-            thinking_budgets=args.budget,
-            variants=args.variants,
-            vignette_count=len(all_vignettes) * len(args.variants) * len(args.budget),
-            notes=args.notes,
-        )
-
-        for budget in args.budget:
-            runner = YentlGuardRunner(
-                model_version=args.model,
-                thinking_budget=budget,
-                delta_m_threshold=args.threshold,
-                phoenix_mcp_client=mcp_client,
+        with BQWriter(run_id=run_id, gate_threshold=args.threshold) as bq:
+            bq.register_experiment(
+                label=args.label or f"{args.model} {','.join(args.budget)} {','.join(args.variants)}",
+                models=[args.model],
+                thinking_budgets=args.budget,
+                variants=args.variants,
+                vignette_count=len(all_vignettes) * len(args.variants) * len(args.budget),
+                notes=args.notes,
             )
 
-            for variant in args.variants:
-                vignettes = load_vignettes(variant=variant)
-                logger.info(
-                    "Running %d vignettes | model=%s | budget=%s | variant=%s",
-                    len(vignettes), args.model, budget, variant,
+            tasks = []
+            for budget in args.budget:
+                runner = YentlGuardRunner(
+                    model_version=args.model,
+                    thinking_budget=budget,
+                    delta_m_threshold=args.threshold,
+                    phoenix_mcp_client=mcp_client,
                 )
-                for v in vignettes:
-                    run = runner.run(
-                        vignette_id=v.vignette_id,
-                        vignette_text=v.text,
-                        demographic_variant=variant,
-                    )
-                    bq.write(
-                        run=run,
-                        esi_ground_truth=getattr(v, "esi_ground_truth", None),
-                        clinical_category=getattr(v, "clinical_category", None),
-                    )
-                    if run.crr:
-                        logger.info(
-                            "  %s | CRR=%.3f | ESI %s→%s | intervention=%s",
-                            v.vignette_id,
-                            run.crr.crr,
-                            run.pass1_esi,
-                            run.pass2_esi,
-                            run.intervention_triggered,
-                        )
 
+                for variant in args.variants:
+                    vignettes = load_vignettes(variant=variant)
+                    logger.info(
+                        "Queueing %d vignettes | model=%s | budget=%s | variant=%s",
+                        len(vignettes), args.model, budget, variant,
+                    )
+                    for v in vignettes:
+                        async def _process(v=v, variant=variant, runner=runner):
+                            async with semaphore:
+                                run = await runner.run(
+                                    vignette_id=v.vignette_id,
+                                    vignette_text=v.text,
+                                    demographic_variant=variant,
+                                )
+                                bq.write(
+                                    run=run,
+                                    esi_ground_truth=getattr(v, "esi_ground_truth", None),
+                                    clinical_category=getattr(v, "clinical_category", None),
+                                )
+                                if run.crr:
+                                    logger.info(
+                                        "  %s | CRR=%.3f | ESI %s→%s | intervention=%s",
+                                        v.vignette_id,
+                                        run.crr.crr,
+                                        run.pass1_esi,
+                                        run.pass2_esi,
+                                        run.intervention_triggered,
+                                    )
+                        tasks.append(_process())
+
+            await asyncio.gather(*tasks)
+
+    asyncio.run(_async_cmd_run())
     logger.info("Run complete. Query results: SELECT * FROM `%s` WHERE run_id = '%s'", "runs", run_id)
 
 
@@ -157,13 +184,6 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     Pull completed run data from BigQuery, compute all summary statistics,
     and write a self-contained HTML report + CSV files to the output directory.
     """
-    from pathlib import Path
-    from datetime import datetime, timezone
-
-    from yentlguard.eval.analyze import Analyzer
-    from yentlguard.eval.report import generate_html_report
-    from yentlguard.eval.export import export_csvs
-
     run_ids: list[str] = args.run_ids
     output_path = Path(args.output)
 
@@ -206,7 +226,6 @@ def cmd_analyze(args: argparse.Namespace) -> None:
 
     # ── Agent Builder eval task (optional) ────────────────────────────────
     if args.register_eval:
-        from yentlguard.eval.agent_builder import AgentBuilderEvalLayer
         logger.info("Registering Agent Builder eval task...")
         try:
             layer = AgentBuilderEvalLayer()
@@ -254,6 +273,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_baseline = sub.add_parser("baseline", help="Populate Phoenix nb_ambiguous baseline spans.")
     p_baseline.add_argument("--model", default="gemini-2.5-pro")
     p_baseline.add_argument("--budget", default="medium", choices=["low", "medium", "high"])
+    p_baseline.add_argument("--concurrency", type=int, default=3, help="Max concurrent LLM requests (default: 3).")
     p_baseline.set_defaults(func=cmd_baseline)
 
     # ── run ───────────────────────────────────────────────────────────────────
@@ -272,6 +292,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument(
         "--threshold", type=float, default=1.0,
         help="ΔM threshold below which correction gate fires (default: 1.0 nat).",
+    )
+    p_run.add_argument(
+        "--concurrency", type=int, default=3,
+        help="Max concurrent vignettes to process (default: 3).",
     )
     p_run.add_argument(
         "--phoenix-mcp-endpoint", default="http://localhost:6006/mcp",

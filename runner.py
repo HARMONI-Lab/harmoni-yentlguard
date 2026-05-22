@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 
 from google import genai
 from google.genai import types
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 
 from opentelemetry import trace as otel_trace
 
@@ -271,7 +272,21 @@ class YentlGuardRunner:
             for trigger in DEMOGRAPHIC_TRIGGER_TOKENS
         )
 
-    def run(self, vignette_id: str, vignette_text: str, demographic_variant: str) -> VignetteRun:
+    @retry(
+        wait=wait_exponential(min=2, max=60),
+        stop=stop_after_attempt(5),
+    )
+    async def _async_generate_content(self, prompt: str, config: types.GenerateContentConfig):
+        return await asyncio.wait_for(
+            self._client.aio.models.generate_content(
+                model=self.model_version,
+                contents=prompt,
+                config=config,
+            ),
+            timeout=120.0
+        )
+
+    async def run(self, vignette_id: str, vignette_text: str, demographic_variant: str) -> VignetteRun:
         """
         Execute a full two-pass mechanistic run for one vignette × variant.
 
@@ -303,9 +318,8 @@ class YentlGuardRunner:
             # ── Pass 1 ────────────────────────────────────────────────────────
             logger.info("[%s/%s] Pass 1 → %s", vignette_id, demographic_variant, self.model_version)
             try:
-                response1 = self._client.models.generate_content(
-                    model=self.model_version,
-                    contents=vignette_text,
+                response1 = await self._async_generate_content(
+                    prompt=vignette_text,
                     config=config,
                 )
                 run.raw_text_pass1 = response1.text or ""
@@ -431,14 +445,12 @@ class YentlGuardRunner:
                 "3c":         self._build_distractor_c(vignette_text),
             }
 
-            branch_results = asyncio.run(
-                self._run_parallel_branches(
-                    branches=branches,
-                    config=config,
-                    vignette_id=vignette_id,
-                    demographic_variant=demographic_variant,
-                    run=run,
-                )
+            branch_results = await self._run_parallel_branches(
+                branches=branches,
+                config=config,
+                vignette_id=vignette_id,
+                demographic_variant=demographic_variant,
+                run=run,
             )
 
             # ── Store corrective branch results ───────────────────────────────
@@ -509,15 +521,9 @@ class YentlGuardRunner:
                     "[%s/%s] Branch %s -- calling Vertex AI",
                     vignette_id, demographic_variant, label,
                 )
-                # google-genai async support via asyncio executor
-                loop = asyncio.get_event_loop()
-                response = await loop.run_in_executor(
-                    None,
-                    lambda: self._client.models.generate_content(
-                        model=self.model_version,
-                        contents=prompt,
-                        config=config,
-                    )
+                response = await self._async_generate_content(
+                    prompt=prompt,
+                    config=config,
                 )
                 raw_text  = response.text or ""
                 dm_result = compute_delta_m(response)

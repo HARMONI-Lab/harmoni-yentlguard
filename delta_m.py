@@ -93,7 +93,7 @@ def compute_delta_m(response) -> DeltaMResult | None:
         runner_up_token = None
         runner_up_logprob = None
 
-        for alt in top_k.candidates:
+        for alt in (top_k.candidates or []):
             alt_text = alt.token.strip()
             if alt_text in ESI_TOKENS and alt_text != esi_digit:
                 if runner_up_logprob is None or alt.log_probability > runner_up_logprob:

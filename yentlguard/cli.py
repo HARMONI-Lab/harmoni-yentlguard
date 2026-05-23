@@ -56,15 +56,33 @@ def cmd_baseline(args: argparse.Namespace) -> None:
         phoenix_mcp_client=None,  # baseline pass: no MCP lookup needed
     )
 
-    # Load vignettes from YentlBench
-    from yentlbench.data import load_vignettes
-    vignettes = load_vignettes(variant="nb_ambiguous")
-    logger.info("Loaded %d nb_ambiguous vignettes from YentlBench.", len(vignettes))
+    # Load vignettes from YentlBench prepared CSV
+    import pathlib as _pathlib
+    import pandas as _pd
+    from yentlbench.local_runner.prompt import build_prompt as _build_prompt
 
-    for v in vignettes:
+    dataset_path = _pathlib.Path(args.dataset)
+    if not dataset_path.exists():
+        logger.error(
+            "Dataset not found: %s\n"
+            "Run: yentlbench prepare  (requires MIMIC-IV-ED data)\n"
+            "Or set --dataset to point at your dataset_quintets.csv",
+            dataset_path,
+        )
+        raise SystemExit(1)
+
+    df = _pd.read_csv(dataset_path)
+    df = df[df["acuity"].notna()]
+    df_variant = df[df["gender_variant"] == "nb_ambiguous"]
+    logger.info("Loaded %d nb_ambiguous vignettes from %s", len(df_variant), dataset_path)
+
+    for _, row in df_variant.iterrows():
+        vignette = row.to_dict()
+        vignette_id = str(int(vignette["stay_id"]))
+        text = _build_prompt(vignette, "nb_ambiguous")
         run = runner.run(
-            vignette_id=v.vignette_id,
-            vignette_text=v.text,
+            vignette_id=vignette_id,
+            vignette_text=text,
             demographic_variant="nb_ambiguous",
         )
         status = "✓" if not run.errors else "✗"
@@ -72,7 +90,7 @@ def cmd_baseline(args: argparse.Namespace) -> None:
         logger.info(
             "%s %s | ESI=%s | ΔM=%.4f",
             status,
-            v.vignette_id,
+            vignette_id,
             run.pass1_esi or "?",
             dm or 0.0,
         )
@@ -95,8 +113,25 @@ def cmd_run(args: argparse.Namespace) -> None:
     run_id = args.run_id or str(uuid.uuid4())
     logger.info("Experiment run_id: %s", run_id)
 
-    from yentlbench.data import load_vignettes
-    all_vignettes = load_vignettes(variant=args.variants[0])  # count for registration
+    import pathlib as _pathlib
+    import pandas as _pd
+    from yentlbench.local_runner.prompt import build_prompt as _build_prompt
+
+    dataset_path = _pathlib.Path(args.dataset)
+    if not dataset_path.exists():
+        logger.error(
+            "Dataset not found: %s\n"
+            "Run: yentlbench prepare  (requires MIMIC-IV-ED data)\n"
+            "Or set --dataset to point at your dataset_quintets.csv",
+            dataset_path,
+        )
+        raise SystemExit(1)
+
+    df_all = _pd.read_csv(dataset_path)
+    df_all = df_all[df_all["acuity"].notna()]
+
+    # Use first variant for experiment registration count
+    n_per_variant = len(df_all[df_all["gender_variant"] == args.variants[0]])
 
     with BQWriter(run_id=run_id, gate_threshold=args.threshold) as bq:
 
@@ -105,7 +140,7 @@ def cmd_run(args: argparse.Namespace) -> None:
             models=[args.model],
             thinking_budgets=args.budget,
             variants=args.variants,
-            vignette_count=len(all_vignettes) * len(args.variants) * len(args.budget),
+            vignette_count=n_per_variant * len(args.variants) * len(args.budget),
             notes=args.notes,
         )
 
@@ -118,24 +153,28 @@ def cmd_run(args: argparse.Namespace) -> None:
             )
 
             for variant in args.variants:
-                vignettes = load_vignettes(variant=variant)
+                vignettes_df = df_all[df_all["gender_variant"] == variant]
                 logger.info(
                     "Running %d vignettes | model=%s | budget=%s | variant=%s",
-                    len(vignettes), args.model, budget, variant,
+                    len(vignettes_df), args.model, budget, variant,
                 )
-                for v in vignettes:
+                for _, row in vignettes_df.iterrows():
+                    vignette = row.to_dict()
+                    vignette_id = str(int(vignette["stay_id"]))
+                    text = _build_prompt(vignette, variant)
+                    esi_gt = str(int(vignette["acuity"])) if not _pd.isna(vignette.get("acuity")) else None
+                    clinical_cat = str(vignette.get("chiefcomplaint", "")) or None
                     run = runner.run(
-                        vignette_id=v.vignette_id,
-                        vignette_text=v.text,
+                        vignette_id=vignette_id,
+                        vignette_text=text,
                         demographic_variant=variant,
                     )
                     bq.write(
                         run=run,
-                        esi_ground_truth=getattr(v, "esi_ground_truth", None),
-                        clinical_category=getattr(v, "clinical_category", None),
+                        esi_ground_truth=esi_gt,
+                        clinical_category=clinical_cat,
                     )
                     if run.crr:
-                        # Compute sycophancy gap for terminal summary
                         dist_crrs = [
                             r.crr for r in [
                                 run.crr_distractor_a,
@@ -147,7 +186,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                         gap_str = f" | gap={run.crr.crr - max_dist:.3f}" if max_dist is not None else ""
                         logger.info(
                             "  %s | CRR=%.3f%s | ESI %s->%s | intervention=%s",
-                            v.vignette_id,
+                            vignette_id,
                             run.crr.crr,
                             gap_str,
                             run.pass1_esi,
@@ -265,6 +304,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_baseline = sub.add_parser("baseline", help="Populate Phoenix nb_ambiguous baseline spans.")
     p_baseline.add_argument("--model", default="gemini-2.5-pro")
     p_baseline.add_argument("--budget", default="medium", choices=["low", "medium", "high"])
+    p_baseline.add_argument(
+        "--dataset",
+        default="dataset_output/dataset_quintets.csv",
+        help="Path to dataset_quintets.csv produced by: yentlbench prepare",
+    )
     p_baseline.set_defaults(func=cmd_baseline)
 
     # ── run ───────────────────────────────────────────────────────────────────
@@ -278,7 +322,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument(
         "--variants", nargs="+",
         default=["female", "nb_label_only"],
-        choices=["male", "female", "nb_ambiguous", "nb_label_only", "nb_explicit"],
+        # nb_explicit does not exist in YentlBench — valid variants are these four:
+        choices=["male", "female", "nb_ambiguous", "nb_label_only"],
+    )
+    p_run.add_argument(
+        "--dataset",
+        default="dataset_output/dataset_quintets.csv",
+        help="Path to dataset_quintets.csv produced by: yentlbench prepare",
     )
     p_run.add_argument(
         "--threshold", type=float, default=1.0,

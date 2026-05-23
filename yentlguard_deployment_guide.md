@@ -333,11 +333,60 @@ If config is incomplete, you'll see a clear error listing which values are missi
 
 ---
 
-### Stage 5: Running the Experiment Pipeline
+### Stage 5: Prepare the YentlBench Dataset
+
+YentlGuard reads `dataset_quintets.csv` produced by YentlBench. This file is not bundled — you must generate it once from the MIMIC-IV-ED Demo dataset.
+
+**Step 5.0a — Obtain MIMIC-IV-ED Demo from PhysioNet.**
+
+Go to physionet.org and complete the Data Use Agreement for MIMIC-IV-ED Demo (v2.2). Download and unzip so that the following path exists in your working directory:
+
+```
+mimic-iv-ed-demo-2.2/ed/edstays.csv
+mimic-iv-ed-demo-2.2/ed/triage.csv
+```
+
+**Step 5.0b — Run YentlBench dataset preparation.**
+
+```bash
+yentlbench prepare
+```
+
+This joins `edstays` and `triage`, filters to male patients, excludes clinically confounded complaints (abdominal pain, etc.), and expands each record into five demographic variants. Output:
+
+```
+dataset_output/dataset_males.csv    # 87 curated male stays
+dataset_output/dataset_quintets.csv # 435 rows (87 stays × 5 variants)
+```
+
+The five variants in the CSV are: `nb_ambiguous`, `female`, `male`, `nb_label_only`, `nb_full`. YentlGuard uses only the four variants in `config.ALL_VARIANTS` — `nb_full` is in the CSV but intentionally excluded from the benchmark pipeline by YentlBench design.
+
+**Step 5.0c — Verify the dataset.**
+
+```bash
+python3 -c "
+import pandas as pd
+df = pd.read_csv('dataset_output/dataset_quintets.csv')
+print(f'Rows: {len(df)}')
+print(f'Variants: {sorted(df.gender_variant.unique())}')
+print(f'Quintets: {df.quintet_id.nunique()}')
+print(df.groupby("gender_variant").size())
+"
+```
+
+Expected output: 435 rows, 87 unique quintets, 5 variants with 87 rows each. Pass the path via `--dataset` if it differs from the default:
+
+```bash
+yentlguard baseline --dataset /path/to/dataset_quintets.csv --model gemini-2.5-pro --budget medium
+```
+
+---
+
+### Stage 6: Running the Experiment Pipeline
 
 The pipeline has three sequential phases: `baseline` → `run` → `analyze`. They must be run in this order for the first experiment, because `run` uses Phoenix baseline spans populated by `baseline` to compute CRR.
 
-**Step 5.1 — Populate the nb_ambiguous baseline.**  
+**Step 6.1 — Populate the nb_ambiguous baseline.**  
 This runs every vignette in the `nb_ambiguous` variant (no demographic label present) through your chosen model and captures the ΔM for each vignette in Phoenix. These become the recovery targets for CRR computation in the `run` phase.
 
 ```bash
@@ -355,7 +404,7 @@ Each vignette produces a log line:
 
 Vignettes with ΔM < 1.0 in the baseline are inherently ambiguous even without demographic signal — important context for interpreting CRR results later. When this completes, open Phoenix and verify spans are appearing under the `yentlguard` project.
 
-**Step 5.2 — Run the Gemini 2.5 Pro mechanistic experiment.**  
+**Step 6.2 — Run the Gemini 2.5 Pro mechanistic experiment.**  
 This executes the two-pass correction loop across your chosen variants. Start with `female` and `nb_label_only` as they are the most likely to trigger the correction gate:
 
 ```bash
@@ -382,7 +431,7 @@ Note the `run_id` printed at the start of this command. It is a UUID auto-genera
 Experiment run_id: a3f7c219-4b81-4e2c-b8d0-1c2e5f8a9d3b
 ```
 
-**Step 5.3 — Run the Gemini 3.1 Pro experiment.**  
+**Step 6.3 — Run the Gemini 3.1 Pro experiment.**  
 Same vignettes, same variants, same thinking budgets — different model:
 
 ```bash
@@ -396,7 +445,7 @@ yentlguard run \
 
 Save this run_id too.
 
-**Step 5.4 — Run remaining variants.**  
+**Step 6.4 — Run remaining variants.**  
 Once the primary variants are complete, run `nb_explicit` (non-binary with explicit label) and `male` (baseline behavioral reference):
 
 ```bash
@@ -415,9 +464,9 @@ yentlguard run \
 
 ---
 
-### Stage 6: Analysis and Reporting
+### Stage 7: Analysis and Reporting
 
-**Step 6.1 — Generate the analysis report.**  
+**Step 7.1 — Generate the analysis report.**  
 Pass both run_ids from the 2.5 Pro and 3.1 Pro experiments:
 
 ```bash
@@ -477,7 +526,7 @@ The raw pass CSVs contain every column in the BigQuery `runs` table for full rep
 
 ---
 
-### Stage 7: When Gemini 3.5 Pro Drops
+### Stage 8: When Gemini 3.5 Pro Drops
 
 This is the payoff of the longitudinal design. No structural changes needed:
 

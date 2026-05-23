@@ -13,11 +13,26 @@ YentlGuardRunner.run().
 Key findings documented here:
   - YentlBench has NO load_vignettes() function or yentlbench.data module
   - Data flows as: MIMIC-IV-ED CSVs → yentlbench prepare → dataset_quintets.csv
+  - YentlGuard does NOT run yentlbench prepare — it reads the prepared CSV
   - Vignettes are plain dicts, not objects with .vignette_id / .text attributes
   - build_prompt(vignette_dict, variant) produces the prompt text
   - acuity column = ESI ground truth (integer 1-5)
-  - Variant names: nb_ambiguous, female, male, nb_label_only
-    (nb_explicit does NOT exist in YentlBench — YentlGuard was wrong)
+  - stay_id column = vignette identifier (integer, cast to str for YentlGuard)
+
+  Variant inventory:
+    dataset_quintets.csv contains 5 variants:
+      nb_ambiguous  — no sex info (TRUE baseline)
+      female        — full female signal (name + she/her + Female)
+      male          — full male signal (name + he/him + Male)
+      nb_label_only — Non-binary label only, male name, no pronoun
+      nb_full       — full NB signal (neutral name + they/them + Non-binary)
+
+    config.ALL_VARIANTS defines 4 variants (nb_full intentionally excluded):
+      nb_ambiguous, female, male, nb_label_only
+
+    YentlGuard uses config.ALL_VARIANTS — nb_full is in the CSV but not
+    in the benchmark pipeline by design.
+    nb_explicit does NOT exist anywhere in YentlBench.
 """
 
 import os
@@ -114,19 +129,58 @@ class TestYentlBenchPackageAPI(unittest.TestCase):
 
     def test_config_variant_names(self):
         """
-        Document the actual variant names. nb_explicit does NOT exist.
-        YentlGuard must use: nb_ambiguous, female, male, nb_label_only
+        Document the actual variant names.
+
+        config.ALL_VARIANTS has 4 variants — nb_full is intentionally excluded
+        from the benchmark pipeline even though dataset_quintets.csv contains it.
+        nb_explicit does not exist anywhere in YentlBench.
         """
         from yentlbench.config import ALL_VARIANTS
+        from yentlbench.dataset_prep import VARIANTS as PREP_VARIANTS
+
         self.assertIn("nb_ambiguous", ALL_VARIANTS)
         self.assertIn("female", ALL_VARIANTS)
         self.assertIn("male", ALL_VARIANTS)
         self.assertIn("nb_label_only", ALL_VARIANTS)
         self.assertNotIn(
             "nb_explicit", ALL_VARIANTS,
-            "nb_explicit does not exist in YentlBench. "
-            "YentlGuard CLI and preflight tests reference it incorrectly."
+            "nb_explicit does not exist in YentlBench."
         )
+
+        # nb_full is in the dataset but intentionally excluded from config
+        prep_variants = {v["gender_variant"] for v in PREP_VARIANTS}
+        self.assertIn("nb_full", prep_variants,
+            "nb_full must exist in dataset_quintets.csv")
+        self.assertNotIn("nb_full", ALL_VARIANTS,
+            "nb_full is intentionally excluded from config.ALL_VARIANTS "
+            "and the benchmark pipeline — YentlGuard correctly omits it.")
+
+        # Document the gap explicitly
+        in_csv_not_config = prep_variants - set(ALL_VARIANTS)
+        print(f"\n  Variants in CSV but not config.ALL_VARIANTS: {in_csv_not_config}")
+        print(f"  YentlGuard benchmark variants: {sorted(ALL_VARIANTS)}")
+
+    def test_yentlguard_does_not_run_prepare(self):
+        """
+        YentlGuard reads dataset_quintets.csv — it does NOT call yentlbench prepare.
+
+        Prerequisites before running YentlGuard:
+          1. Obtain MIMIC-IV-ED Demo from PhysioNet (requires DUA)
+          2. Place mimic-iv-ed-demo-2.2/ed/ in the working directory
+          3. Run: yentlbench prepare
+          4. Verify dataset_output/dataset_quintets.csv exists
+          5. Pass path via --dataset to yentlguard baseline / run
+
+        This test documents the contract, not the runtime behavior.
+        """
+        from yentlbench.dataset_prep import DATA_DIR, OUTPUT_DIR
+
+        # YentlGuard expects the OUTPUT, not the input
+        expected_input_to_yentlguard = OUTPUT_DIR / "dataset_quintets.csv"
+        self.assertEqual(str(expected_input_to_yentlguard), "dataset_output/dataset_quintets.csv")
+
+        # YentlBench reads MIMIC-IV-ED from here — YentlGuard never touches this
+        self.assertEqual(str(DATA_DIR), "mimic-iv-ed-demo-2.2/ed")
 
     def test_parse_esi_extracts_digit_from_json(self):
         """

@@ -269,8 +269,7 @@ class Analyzer:
             values=["delta_m", "tar", "esi_predicted", "esi_correct"],
             aggfunc="first",
         )
-        pivot.columns = [f"{m}__{b}__{v}" for m, b, v in
-                         [(v, b, m) for m, b, v in pivot.columns]]
+        pivot.columns = [f"{val}__{model}__{budget}" for val, model, budget in pivot.columns]
         return pivot.reset_index()
 
     def _compute_sycophancy(self, run_ids: list[str]) -> pd.DataFrame:

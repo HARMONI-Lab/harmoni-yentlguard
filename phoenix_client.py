@@ -1,19 +1,27 @@
 """
-PhoenixMCPClient — queries Arize Phoenix via MCP for nb_ambiguous baseline ΔM.
+YentlGuard Phoenix MCP client.
 
-The correction gate in YentlGuardRunner calls this client to retrieve the
-historical ΔM for a given vignette under the nb_ambiguous condition, which
-serves as the recovery target for CRR computation.
+Queries Arize Phoenix via MCP for nb_ambiguous baseline ΔM values.
+The correction gate in YentlGuardRunner calls this client to retrieve
+the historical ΔM for a given vignette under the nb_ambiguous condition,
+which serves as the recovery target for CRR computation.
 
-Phoenix exposes an MCP server at a known endpoint. We query it for spans
-matching the vignette_id + variant combination and extract the stored
-delta_m attribute from the span metadata.
+Uses the correct mcp>=1.0.0 transport pattern:
+    sse_client(url) → two anyio streams
+    ClientSession(read_stream, write_stream) → session
 """
 
+import asyncio
+import json
 import logging
-from typing import Any
+
+from mcp.client.sse import sse_client
+from mcp.client.session import ClientSession
 
 logger = logging.getLogger(__name__)
+
+# Default timeout for MCP tool calls (seconds)
+_MCP_TIMEOUT = 15.0
 
 
 class PhoenixMCPClient:
@@ -23,7 +31,7 @@ class PhoenixMCPClient:
     Parameters
     ----------
     mcp_endpoint:
-        Phoenix MCP server URL, e.g. "http://localhost:6006/mcp".
+        Phoenix MCP server SSE URL, e.g. "http://localhost:6006/mcp/sse".
     project_name:
         Phoenix project to scope queries to (default: "yentlguard").
     """
@@ -36,6 +44,45 @@ class PhoenixMCPClient:
         self.mcp_endpoint = mcp_endpoint
         self.project_name = project_name
 
+    # ── Internal async helpers ─────────────────────────────────────────────────
+
+    async def _call_tool(self, tool_name: str, arguments: dict) -> list[dict]:
+        """
+        Open an SSE transport, create a ClientSession, call a tool, return
+        the parsed JSON content blocks as a list of dicts.
+
+        Raises RuntimeError on timeout or transport failure.
+        """
+        async with sse_client(self.mcp_endpoint) as (read_stream, write_stream):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                result = await session.call_tool(tool_name, arguments=arguments)
+
+        # result.content is a list of TextContent / ImageContent objects.
+        # We expect TextContent blocks whose .text is JSON-encoded span data.
+        parsed = []
+        for block in result.content:
+            text = getattr(block, "text", None)
+            if text:
+                try:
+                    parsed.append(json.loads(text))
+                except json.JSONDecodeError:
+                    # Non-JSON text block — include as raw string
+                    parsed.append({"raw": text})
+        return parsed
+
+    def _run(self, coro):
+        """Run a coroutine with the MCP timeout, from synchronous context."""
+        try:
+            return asyncio.run(asyncio.wait_for(coro, timeout=_MCP_TIMEOUT))
+        except asyncio.TimeoutError:
+            raise RuntimeError(
+                f"PhoenixMCPClient timed out after {_MCP_TIMEOUT}s. "
+                "Check Phoenix MCP server health."
+            )
+
+    # ── Public API ─────────────────────────────────────────────────────────────
+
     def get_baseline_delta_m(
         self,
         vignette_id: str,
@@ -43,74 +90,65 @@ class PhoenixMCPClient:
         model_version: str | None = None,
     ) -> float:
         """
-        Retrieve the stored ΔM for a vignette × variant from Phoenix span history.
+        Retrieve the mean ΔM for a vignette × variant from Phoenix span history.
 
         Queries Phoenix MCP for spans where:
-            span.attributes["vignette_id"] == vignette_id
-            span.attributes["demographic_variant"] == variant
+            attributes["yentlguard.vignette_id"] == vignette_id
+            attributes["yentlguard.demographic_variant"] == variant
 
-        Returns the mean ΔM across matching spans (to handle multiple runs).
+        Returns the mean ΔM across matching spans.
 
         Raises
         ------
         ValueError
-            If no matching spans are found for this vignette × variant.
+            If no matching spans are found or none contain a delta_m attribute.
         RuntimeError
-            If the MCP query fails.
+            If the MCP query fails or times out.
         """
-        import mcp
-        import asyncio
-
-        async def _query() -> float:
-            async with mcp.ClientSession(self.mcp_endpoint) as session:
-                filters: dict[str, Any] = {
-                    "project_name": self.project_name,
-                    "attributes": {
-                        "vignette_id": vignette_id,
-                        "demographic_variant": variant,
-                    },
-                    "metric": "delta_m",
-                }
-                if model_version:
-                    filters["attributes"]["model_version"] = model_version
-
-                result = await session.call_tool("get_spans", arguments=filters)
-
-                spans = result.content
-                if not spans:
-                    raise ValueError(
-                        f"No Phoenix spans found for vignette_id={vignette_id}, "
-                        f"variant={variant}. Run nb_ambiguous baseline first."
-                    )
-
-                delta_m_values = [
-                    span["attributes"].get("delta_m")
-                    for span in spans
-                    if span.get("attributes", {}).get("delta_m") is not None
-                ]
-
-                if not delta_m_values:
-                    raise ValueError(
-                        f"Spans found for {vignette_id}/{variant} but none contain "
-                        f"delta_m attribute. Verify YentlGuard span annotation."
-                    )
-
-                mean_delta_m = sum(delta_m_values) / len(delta_m_values)
-                logger.debug(
-                    "Phoenix baseline: vignette=%s variant=%s delta_m=%.4f (n=%d spans)",
-                    vignette_id,
-                    variant,
-                    mean_delta_m,
-                    len(delta_m_values),
-                )
-                return mean_delta_m
+        arguments: dict = {
+            "project_name": self.project_name,
+            "filters": {
+                "attributes.yentlguard.vignette_id": vignette_id,
+                "attributes.yentlguard.demographic_variant": variant,
+            },
+        }
+        if model_version:
+            arguments["filters"]["attributes.yentlguard.model_version"] = model_version
 
         try:
-            return asyncio.run(_query())
+            spans = self._run(self._call_tool("get_spans", arguments))
+        except RuntimeError:
+            raise
         except Exception as e:
             raise RuntimeError(
-                f"PhoenixMCPClient query failed for {vignette_id}/{variant}: {e}"
+                f"PhoenixMCPClient baseline lookup failed for "
+                f"{vignette_id}/{variant}: {e}"
             ) from e
+
+        if not spans:
+            raise ValueError(
+                f"No Phoenix spans found for vignette_id={vignette_id}, "
+                f"variant={variant}. Run the baseline command first."
+            )
+
+        delta_m_values = [
+            s.get("attributes", {}).get("yentlguard.delta_m")
+            for s in spans
+            if isinstance(s, dict) and s.get("attributes", {}).get("yentlguard.delta_m") is not None
+        ]
+
+        if not delta_m_values:
+            raise ValueError(
+                f"Spans found for {vignette_id}/{variant} but none contain "
+                f"yentlguard.delta_m attribute. Verify YentlGuard span annotation."
+            )
+
+        mean_delta_m = sum(delta_m_values) / len(delta_m_values)
+        logger.debug(
+            "Phoenix baseline: vignette=%s variant=%s delta_m=%.4f (n=%d spans)",
+            vignette_id, variant, mean_delta_m, len(delta_m_values),
+        )
+        return mean_delta_m
 
     def get_span_history(
         self,
@@ -121,28 +159,23 @@ class PhoenixMCPClient:
     ) -> list[dict]:
         """
         Return raw span records for a vignette for broader analysis.
+
         Useful for TAR distribution comparison and PSS computation.
         """
-        import mcp
-        import asyncio
-
-        async def _query() -> list[dict]:
-            async with mcp.ClientSession(self.mcp_endpoint) as session:
-                filters: dict[str, Any] = {
-                    "project_name": self.project_name,
-                    "attributes": {"vignette_id": vignette_id},
-                    "limit": limit,
-                }
-                if variant:
-                    filters["attributes"]["demographic_variant"] = variant
-                if model_version:
-                    filters["attributes"]["model_version"] = model_version
-
-                result = await session.call_tool("get_spans", arguments=filters)
-                return result.content or []
+        arguments: dict = {
+            "project_name": self.project_name,
+            "filters": {"attributes.yentlguard.vignette_id": vignette_id},
+            "limit": limit,
+        }
+        if variant:
+            arguments["filters"]["attributes.yentlguard.demographic_variant"] = variant
+        if model_version:
+            arguments["filters"]["attributes.yentlguard.model_version"] = model_version
 
         try:
-            return asyncio.run(_query())
+            return self._run(self._call_tool("get_spans", arguments))
+        except RuntimeError:
+            raise
         except Exception as e:
             raise RuntimeError(
                 f"PhoenixMCPClient span history query failed for {vignette_id}: {e}"

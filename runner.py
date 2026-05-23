@@ -519,7 +519,7 @@ class YentlGuardRunner:
                     vignette_id, demographic_variant, label,
                 )
                 # google-genai async support via asyncio executor
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 response = await loop.run_in_executor(
                     None,
                     lambda: self._client.models.generate_content(

@@ -10,7 +10,9 @@ This lets you compare ΔM distributions before and after intervention
 with a simple WHERE pass_number = 1 / 2 filter.
 """
 
+import json
 import logging
+import pathlib
 import uuid
 from datetime import datetime, timezone
 from google.cloud import bigquery
@@ -239,7 +241,7 @@ class BQWriter:
         self.gate_threshold = gate_threshold
         self._client = client or bigquery.Client(project=GCP_PROJECT_ID)
         self._buffer: list[dict] = []
-        self._buffer_size = 50  # flush every N rows
+        self._buffer_size = 500  # flush every N rows; 50 too small for BQ streaming
 
     def write(
         self,
@@ -264,13 +266,31 @@ class BQWriter:
             self.flush()
 
     def flush(self) -> None:
-        """Force-write all buffered rows to BigQuery."""
+        """Force-write all buffered rows to BigQuery.
+
+        On insert failure, rows are written to a local JSONL dead-letter file
+        (yentlguard_dlq_{run_id}.jsonl) rather than silently dropped.
+        Re-ingest failed rows with:
+            bq load --source_format=NEWLINE_DELIMITED_JSON <table> <dlq_file>
+        """
         if not self._buffer:
             return
 
         errors = self._client.insert_rows_json(RUNS_TABLE, self._buffer)
         if errors:
-            logger.error("BigQuery insert errors: %s", errors)
+            logger.error(
+                "BigQuery insert errors (%d rows affected): %s",
+                len(self._buffer), errors,
+            )
+            dlq_path = pathlib.Path(f"yentlguard_dlq_{self.run_id}.jsonl")
+            with dlq_path.open("a", encoding="utf-8") as f:
+                for row in self._buffer:
+                    f.write(json.dumps(row, default=str) + "\n")
+            logger.warning(
+                "Failed rows written to DLQ: %s (%d rows). "
+                "Re-ingest: bq load --source_format=NEWLINE_DELIMITED_JSON %s %s",
+                dlq_path, len(self._buffer), RUNS_TABLE, dlq_path,
+            )
         else:
             logger.info(
                 "BQWriter: flushed %d rows to %s (run_id=%s)",
@@ -296,8 +316,6 @@ class BQWriter:
 
         Call once at the start of each experiment batch before any vignette runs.
         """
-        import importlib.metadata
-
         row = {
             "run_id": self.run_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -313,6 +331,10 @@ class BQWriter:
         errors = self._client.insert_rows_json(EXPTS_TABLE, [row])
         if errors:
             logger.error("Experiment registration failed: %s", errors)
+            dlq_path = pathlib.Path(f"yentlguard_dlq_{self.run_id}.jsonl")
+            with dlq_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps({"table": "experiments", "row": row}, default=str) + "\n")
+            logger.warning("Experiment row written to DLQ: %s", dlq_path)
         else:
             logger.info(
                 "Experiment registered: run_id=%s label='%s'",

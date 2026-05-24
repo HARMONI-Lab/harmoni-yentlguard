@@ -139,3 +139,5 @@ mysql_dump.log
 # Cache directories for various tools
 .cache
 .ipynb_checkpoints
+
+*dataset_output/*

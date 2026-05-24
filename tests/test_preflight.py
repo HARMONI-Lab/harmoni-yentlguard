@@ -677,15 +677,15 @@ class TestParallelTriadPreflight(unittest.TestCase):
             print(
                 f"\n  {v.vignette_id} ({elapsed:.1f}s):"
                 f"\n    Pass1  ESI={run.pass1_esi} "
-                f"ΔM={run.pass1_delta_m.delta_m:.4f if run.pass1_delta_m and run.pass1_delta_m.delta_m else 'None'}"
+                f"ΔM={f'{run.pass1_delta_m.delta_m:.4f}' if run.pass1_delta_m and run.pass1_delta_m.delta_m else 'None'}"
                 f"\n    Corr   ESI={run.pass2_esi} "
-                f"ΔM={run.pass2_delta_m.delta_m:.4f if run.pass2_delta_m and run.pass2_delta_m.delta_m else 'None'}"
+                f"ΔM={f'{run.pass2_delta_m.delta_m:.4f}' if run.pass2_delta_m and run.pass2_delta_m.delta_m else 'None'}"
                 f"\n    3a     ESI={run.pass3a_esi} "
-                f"ΔM={run.pass3a_delta_m.delta_m:.4f if run.pass3a_delta_m and run.pass3a_delta_m.delta_m else 'None'}"
+                f"ΔM={f'{run.pass3a_delta_m.delta_m:.4f}' if run.pass3a_delta_m and run.pass3a_delta_m.delta_m else 'None'}"
                 f"\n    3b     ESI={run.pass3b_esi} "
-                f"ΔM={run.pass3b_delta_m.delta_m:.4f if run.pass3b_delta_m and run.pass3b_delta_m.delta_m else 'None'}"
+                f"ΔM={f'{run.pass3b_delta_m.delta_m:.4f}' if run.pass3b_delta_m and run.pass3b_delta_m.delta_m else 'None'}"
                 f"\n    3c     ESI={run.pass3c_esi} "
-                f"ΔM={run.pass3c_delta_m.delta_m:.4f if run.pass3c_delta_m and run.pass3c_delta_m.delta_m else 'None'}"
+                f"ΔM={f'{run.pass3c_delta_m.delta_m:.4f}' if run.pass3c_delta_m and run.pass3c_delta_m.delta_m else 'None'}"
                 f"\n    Errors: {run.errors or 'none'}"
             )
             results.append(run)

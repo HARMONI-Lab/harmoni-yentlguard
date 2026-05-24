@@ -162,8 +162,10 @@ def pass_metrics_span(
             ) as dm_span:
                 _set_delta_m_attributes(dm_span, delta_m_result)
                 dm_span.set_status(
-                    Status(StatusCode.OK if not delta_m_result.is_low_confidence else StatusCode.ERROR,
-                           "low_confidence" if delta_m_result.is_low_confidence else "ok")
+                    Status(
+                        StatusCode.ERROR if delta_m_result.is_low_confidence else StatusCode.OK,
+                        "low_confidence" if delta_m_result.is_low_confidence else ""
+                    )
                 )
 
         # ── tar grandchild ─────────────────────────────────────────────────
@@ -174,8 +176,10 @@ def pass_metrics_span(
             ) as tar_span:
                 _set_tar_attributes(tar_span, tar_result)
                 tar_span.set_status(
-                    Status(StatusCode.OK if not tar_result.is_high_friction else StatusCode.ERROR,
-                           "high_friction" if tar_result.is_high_friction else "ok")
+                    Status(
+                        StatusCode.ERROR if tar_result.is_high_friction else StatusCode.OK,
+                        "high_friction" if tar_result.is_high_friction else ""
+                    )
                 )
 
         yield metrics_span
@@ -230,7 +234,7 @@ def mcp_lookup_span(
         _safe_set(span, "mcp.success", success)
         _safe_set(span, "mcp.error", error)
         span.set_status(
-            Status(StatusCode.OK if success else StatusCode.ERROR, error or "ok")
+            Status(StatusCode.OK if success else StatusCode.ERROR, error if not success else "")
         )
         yield span
 

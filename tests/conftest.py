@@ -14,6 +14,7 @@ resolves cleanly without hitting the real packages.
 import sys
 import types
 import pathlib
+import os
 from unittest.mock import MagicMock
 
 
@@ -24,10 +25,15 @@ def _stub(name: str) -> types.ModuleType:
     return sys.modules[name]
 
 
-# ── Register all stub modules ─────────────────────────────────────────────────
+# Skip stubbing if running preflight tests, which require live libraries.
+_is_preflight = any("test_preflight.py" in arg for arg in sys.argv)
 
-_STUB_NAMES = [
-    # OpenInference
+if not _is_preflight:
+    # ── Register all stub modules ─────────────────────────────────────────────────
+    
+    _STUB_NAMES = [
+        # OpenInference
+
     "openinference",
     "openinference.instrumentation",
     "openinference.instrumentation.google_genai",
@@ -57,82 +63,83 @@ _STUB_NAMES = [
     "vertexai.preview.evaluation",
 ]
 
-for _name in _STUB_NAMES:
-    _stub(_name)
+    for _name in _STUB_NAMES:
+        _stub(_name)
+    
+    # ── Attribute stubs required by specific import statements ────────────────────
+    
+    # openinference.instrumentation.google_genai.GoogleGenAIInstrumentor
+    _oi = sys.modules["openinference.instrumentation.google_genai"]
+    _oi.GoogleGenAIInstrumentor = MagicMock(return_value=MagicMock())
+    
+    # opentelemetry.sdk.trace.export.BatchSpanProcessor
+    _export = sys.modules["opentelemetry.sdk.trace.export"]
+    _export.BatchSpanProcessor = MagicMock()
+    
+    # opentelemetry.sdk.trace.TracerProvider
+    _sdk_trace = sys.modules["opentelemetry.sdk.trace"]
+    _sdk_trace.TracerProvider = MagicMock(return_value=MagicMock())
+    
+    # opentelemetry.sdk.resources.Resource
+    _resources = sys.modules["opentelemetry.sdk.resources"]
+    _resources.Resource = MagicMock()
+    _resources.Resource.create = MagicMock(return_value=MagicMock())
+    
+    # opentelemetry.exporter.otlp.proto.http.trace_exporter.OTLPSpanExporter
+    _otlp = sys.modules["opentelemetry.exporter.otlp.proto.http.trace_exporter"]
+    _otlp.OTLPSpanExporter = MagicMock(return_value=MagicMock())
+    
+    # opentelemetry.trace — tracer, span, status stubs
+    _trace = sys.modules["opentelemetry.trace"]
+    _trace.get_tracer = MagicMock(return_value=MagicMock())
+    _trace.get_current_span = MagicMock(return_value=MagicMock())
+    _trace.SpanKind = MagicMock()
+    _trace.Status = MagicMock()
+    _trace.StatusCode = MagicMock()
+    _trace.Span = MagicMock          # annotation.py imports Span as a type
+    _trace.NonRecordingSpan = MagicMock()
+    
+    # yentlguard.config stub — must be registered before yentlguard submodules import it
+    import types as _types
+    _cfg = _types.ModuleType("yentlguard.config")
+    _cfg.GCP_PROJECT_ID = "test-project"
+    _cfg.GCP_LOCATION   = "us-central1"
+    _cfg.BQ_DATASET_ID  = "test_dataset"
+    _cfg.FULL_DATASET   = "test-project.test_dataset"
+    _cfg.RUNS_TABLE     = "test-project.test_dataset.runs"
+    _cfg.EXPTS_TABLE    = "test-project.test_dataset.experiments"
+    _cfg.BQ_LOCATION    = "US"
+    _cfg.validate       = MagicMock()
+    sys.modules["yentlguard.config"] = _cfg
+    
+    # google.genai stubs
+    _genai = sys.modules["google.genai"]
+    _genai.Client = MagicMock(return_value=MagicMock())
+    
+    _genai_types = sys.modules["google.genai.types"]
+    _genai_types.ThinkingConfig = MagicMock(return_value=MagicMock())
+    _genai_types.GenerateContentConfig = MagicMock(return_value=MagicMock())
+    
+    # google.cloud.bigquery stubs
+    _bq = sys.modules["google.cloud.bigquery"]
+    _bq.Client = MagicMock(return_value=MagicMock())
+    _bq.SchemaField = MagicMock()
+    _bq.Dataset = MagicMock()
+    _bq.Table = MagicMock()
+    _bq.TimePartitioning = MagicMock()
+    _bq.TimePartitioningType = MagicMock()
+    _bq.ArrayQueryParameter = MagicMock()
+    _bq.ScalarQueryParameter = MagicMock()
+    _bq.QueryJobConfig = MagicMock()
 
-# ── Attribute stubs required by specific import statements ────────────────────
 
-# openinference.instrumentation.google_genai.GoogleGenAIInstrumentor
-_oi = sys.modules["openinference.instrumentation.google_genai"]
-_oi.GoogleGenAIInstrumentor = MagicMock(return_value=MagicMock())
-
-# opentelemetry.sdk.trace.export.BatchSpanProcessor
-_export = sys.modules["opentelemetry.sdk.trace.export"]
-_export.BatchSpanProcessor = MagicMock()
-
-# opentelemetry.sdk.trace.TracerProvider
-_sdk_trace = sys.modules["opentelemetry.sdk.trace"]
-_sdk_trace.TracerProvider = MagicMock(return_value=MagicMock())
-
-# opentelemetry.sdk.resources.Resource
-_resources = sys.modules["opentelemetry.sdk.resources"]
-_resources.Resource = MagicMock()
-_resources.Resource.create = MagicMock(return_value=MagicMock())
-
-# opentelemetry.exporter.otlp.proto.http.trace_exporter.OTLPSpanExporter
-_otlp = sys.modules["opentelemetry.exporter.otlp.proto.http.trace_exporter"]
-_otlp.OTLPSpanExporter = MagicMock(return_value=MagicMock())
-
-# opentelemetry.trace — tracer, span, status stubs
-_trace = sys.modules["opentelemetry.trace"]
-_trace.get_tracer = MagicMock(return_value=MagicMock())
-_trace.get_current_span = MagicMock(return_value=MagicMock())
-_trace.SpanKind = MagicMock()
-_trace.Status = MagicMock()
-_trace.StatusCode = MagicMock()
-_trace.Span = MagicMock          # annotation.py imports Span as a type
-_trace.NonRecordingSpan = MagicMock()
-
-# yentlguard.config stub — must be registered before yentlguard submodules import it
-import types as _types
-_cfg = _types.ModuleType("yentlguard.config")
-_cfg.GCP_PROJECT_ID = "test-project"
-_cfg.GCP_LOCATION   = "us-central1"
-_cfg.BQ_DATASET_ID  = "test_dataset"
-_cfg.FULL_DATASET   = "test-project.test_dataset"
-_cfg.RUNS_TABLE     = "test-project.test_dataset.runs"
-_cfg.EXPTS_TABLE    = "test-project.test_dataset.experiments"
-_cfg.BQ_LOCATION    = "US"
-_cfg.validate       = MagicMock()
-sys.modules["yentlguard.config"] = _cfg
-
-# google.genai stubs
-_genai = sys.modules["google.genai"]
-_genai.Client = MagicMock(return_value=MagicMock())
-
-_genai_types = sys.modules["google.genai.types"]
-_genai_types.ThinkingConfig = MagicMock(return_value=MagicMock())
-_genai_types.GenerateContentConfig = MagicMock(return_value=MagicMock())
-
-# google.cloud.bigquery stubs
-_bq = sys.modules["google.cloud.bigquery"]
-_bq.Client = MagicMock(return_value=MagicMock())
-_bq.SchemaField = MagicMock()
-_bq.Dataset = MagicMock()
-_bq.Table = MagicMock()
-_bq.TimePartitioning = MagicMock()
-_bq.TimePartitioningType = MagicMock()
-_bq.ArrayQueryParameter = MagicMock()
-_bq.ScalarQueryParameter = MagicMock()
-_bq.QueryJobConfig = MagicMock()
-
-# vertexai stubs
-_vai = sys.modules["vertexai"]
-_vai.init = MagicMock()
-
-_vai_eval = sys.modules["vertexai.preview.evaluation"]
-_vai_eval.EvalTask = MagicMock()
-_vai_eval.PointwiseMetric = MagicMock()
+    # vertexai stubs
+    _vai = sys.modules["vertexai"]
+    _vai.init = MagicMock()
+    
+    _vai_eval = sys.modules["vertexai.preview.evaluation"]
+    _vai_eval.EvalTask = MagicMock()
+    _vai_eval.PointwiseMetric = MagicMock()
 
 
 def _find_quintets_csv() -> pathlib.Path | None:

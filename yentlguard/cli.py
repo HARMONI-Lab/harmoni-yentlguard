@@ -48,7 +48,7 @@ def cmd_baseline(args: argparse.Namespace) -> None:
     from yentlguard.agent.runner import YentlGuardRunner
 
     logger.info("Initializing Phoenix tracing...")
-    setup_phoenix_tracing()
+    provider = setup_phoenix_tracing()
 
     runner = YentlGuardRunner(
         model_version=args.model,
@@ -59,10 +59,13 @@ def cmd_baseline(args: argparse.Namespace) -> None:
     # Load vignettes from YentlBench prepared CSV
     import pathlib as _pathlib
     import pandas as _pd
+    import uuid as _uuid
+    from yentlguard.eval.bq_writer import BQWriter
     from yentlbench.local_runner.prompt import build_prompt as _build_prompt
 
     dataset_path = _pathlib.Path(args.dataset)
     if not dataset_path.exists():
+
         logger.error(
             "Dataset not found: %s\n"
             "Run: yentlbench prepare  (requires MIMIC-IV-ED data)\n"
@@ -76,26 +79,46 @@ def cmd_baseline(args: argparse.Namespace) -> None:
     df_variant = df[df["gender_variant"] == "nb_ambiguous"]
     logger.info("Loaded %d nb_ambiguous vignettes from %s", len(df_variant), dataset_path)
 
-    for _, row in df_variant.iterrows():
-        vignette = row.to_dict()
-        vignette_id = str(int(vignette["source_stay_id"]))
-        text = _build_prompt(vignette, "nb_ambiguous")
-        run = runner.run(
-            vignette_id=vignette_id,
-            vignette_text=text,
-            demographic_variant="nb_ambiguous",
-        )
-        status = "✓" if not run.errors else "✗"
-        dm = run.pass1_delta_m.delta_m if run.pass1_delta_m and run.pass1_delta_m.delta_m else None
-        logger.info(
-            "%s %s | ESI=%s | ΔM=%.4f",
-            status,
-            vignette_id,
-            run.pass1_esi or "?",
-            dm or 0.0,
+    run_id = str(_uuid.uuid4())
+    logger.info("Baseline BQ run_id: %s", run_id)
+
+    with BQWriter(run_id=run_id, gate_threshold=1.0) as bq:
+        bq.register_experiment(
+            label=f"baseline {args.model} {args.budget}",
+            models=[args.model],
+            thinking_budgets=[args.budget],
+            variants=["nb_ambiguous"],
+            vignette_count=len(df_variant),
+            notes="Baseline pass for nb_ambiguous",
         )
 
+        for _, row in df_variant.iterrows():
+            vignette = row.to_dict()
+            vignette_id = str(int(vignette["source_stay_id"]))
+            text = _build_prompt(vignette, "nb_ambiguous")
+            run = runner.run(
+                vignette_id=vignette_id,
+                vignette_text=text,
+                demographic_variant="nb_ambiguous",
+            )
+            
+            # Record to BQ
+            esi_gt = str(int(vignette["acuity"])) if not _pd.isna(vignette.get("acuity")) else None
+            cat = str(vignette.get("chiefcomplaint", "")) or None
+            bq.write(run=run, esi_ground_truth=esi_gt, clinical_category=cat)
+
+            status = "✓" if not run.errors else "✗"
+            dm = run.pass1_delta_m.delta_m if run.pass1_delta_m and run.pass1_delta_m.delta_m else None
+            logger.info(
+                "%s %s | ESI=%s | ΔM=%.4f",
+                status,
+                vignette_id,
+                run.pass1_esi or "?",
+                dm or 0.0,
+            )
+
     logger.info("Baseline run complete. Spans available in Phoenix project: yentlguard")
+    provider.shutdown()
 
 
 def cmd_run(args: argparse.Namespace) -> None:
@@ -106,7 +129,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     from yentlguard.mcp.phoenix_client import PhoenixMCPClient
     from yentlguard.eval.bq_writer import BQWriter
 
-    setup_phoenix_tracing()
+    provider = setup_phoenix_tracing()
 
     mcp_client = PhoenixMCPClient(mcp_endpoint=args.phoenix_mcp_endpoint)
 
@@ -195,6 +218,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                         )
 
     logger.info("Run complete. Query results: SELECT * FROM `%s` WHERE run_id = '%s'", "runs", run_id)
+    provider.shutdown()
 
 
 def cmd_report(args: argparse.Namespace) -> None:

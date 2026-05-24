@@ -14,6 +14,9 @@ Environment variables:
 """
 
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ── FILL THESE IN ──────────────────────────────────────────────────────────────
 GCP_PROJECT_ID = os.environ.get("YENTLGUARD_GCP_PROJECT", "YOUR_GCP_PROJECT_ID")

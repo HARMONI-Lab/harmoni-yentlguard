@@ -58,21 +58,18 @@ def setup_phoenix_tracing(
 
     exporter = OTLPSpanExporter(
         endpoint=f"{collector_endpoint.rstrip('/')}/v1/traces",
-        headers={"api_key": api_key},
+        headers={"Authorization": f"Bearer {api_key}"},
     )
-
-    provider = trace_sdk.TracerProvider()
-    provider.add_span_processor(BatchSpanProcessor(exporter))
-
-    # Patch the google-genai SDK so every call captures full response metadata.
-    # This must happen before client instantiation.
-    GoogleGenAIInstrumentor().instrument(tracer_provider=provider)
 
     # Attach project tag to all spans via resource attributes
     from opentelemetry.sdk.resources import Resource
     resource = Resource.create({"project.name": project_name})
+
     provider = trace_sdk.TracerProvider(resource=resource)
     provider.add_span_processor(BatchSpanProcessor(exporter))
+
+    # Patch the google-genai SDK so every call captures full response metadata.
+    # This must happen before client instantiation.
     GoogleGenAIInstrumentor().instrument(tracer_provider=provider)
 
     logger.info(

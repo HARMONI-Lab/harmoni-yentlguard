@@ -9,7 +9,7 @@ description = "Mechanistic interpretability layer for clinical triage LLM bias â
 readme = "README.md"
 license = { text = "Apache-2.0" }
 authors = [
-    { name = "Inna Campo", email = "inna@harmonilab.org" }
+    { name = "Inna Rytsareva", email = "inna@harmonilab.org" }
 ]
 keywords = [
     "mechanistic-interpretability",
@@ -31,7 +31,7 @@ requires-python = ">=3.11"
 
 dependencies = [
     # Core benchmark dependency
-    "yentlbench>=0.1.0",
+    "yentlbench>=0.2.0",
 
     # Gemini / Vertex AI
     "google-genai>=1.0.0",
@@ -51,7 +51,7 @@ dependencies = [
     # BigQuery + Agent Builder eval layer
     "google-cloud-bigquery>=3.20.0",
     "google-cloud-bigquery-storage>=2.25.0",   # faster BQ reads via Arrow
-    "vertexai>=1.60.0",                         # Agent Builder / Vertex AI eval
+    "google-cloud-aiplatform>=1.112.0",
     "pyarrow>=16.0.0",                          # BQ â†’ DataFrame fast path
 
     # MCP

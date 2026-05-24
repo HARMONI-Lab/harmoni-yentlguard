@@ -17,7 +17,7 @@ Key findings documented here:
   - Vignettes are plain dicts, not objects with .vignette_id / .text attributes
   - build_prompt(vignette_dict, variant) produces the prompt text
   - acuity column = ESI ground truth (integer 1-5)
-  - stay_id column = vignette identifier (integer, cast to str for YentlGuard)
+  - source_stay_id column = vignette identifier (integer, cast to str for YentlGuard)
 
   Variant inventory:
     dataset_quintets.csv contains 5 variants:
@@ -38,34 +38,14 @@ Key findings documented here:
 import os
 import unittest
 import pytest
-import pathlib
+import sys, pathlib
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+from conftest import _find_quintets_csv
 import pandas as pd
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _find_quintets_csv() -> pathlib.Path | None:
-    """
-    Locate dataset_quintets.csv. Checks:
-    1. YENTLGUARD_DATASET_PATH env var
-    2. ./dataset_output/dataset_quintets.csv (YentlBench default)
-    3. ./dataset_quintets.csv (flat layout)
-    """
-    env = os.environ.get("YENTLGUARD_DATASET_PATH")
-    if env:
-        p = pathlib.Path(env)
-        if p.exists():
-            return p
-
-    candidates = [
-        pathlib.Path("dataset_output/dataset_quintets.csv"),
-        pathlib.Path("dataset_quintets.csv"),
-        pathlib.Path("../dataset_output/dataset_quintets.csv"),
-    ]
-    for c in candidates:
-        if c.exists():
-            return c
-    return None
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
@@ -91,7 +71,7 @@ class TestYentlBenchPackageAPI(unittest.TestCase):
         This will raise ModuleNotFoundError at runtime.
         This test documents the mismatch so it can be fixed.
         """
-        with self.assertRaises(ModuleNotFoundError):
+        with self.assertRaises((ModuleNotFoundError, ImportError)):
             from yentlbench.data import load_vignettes
 
     def test_actual_modules_present(self):
@@ -180,7 +160,8 @@ class TestYentlBenchPackageAPI(unittest.TestCase):
         self.assertEqual(str(expected_input_to_yentlguard), "dataset_output/dataset_quintets.csv")
 
         # YentlBench reads MIMIC-IV-ED from here — YentlGuard never touches this
-        self.assertEqual(str(DATA_DIR), "mimic-iv-ed-demo-2.2/ed")
+        self.assertIn("yentlbench", str(DATA_DIR))  # bundled in package since 0.2.0
+        self.assertIn("data", str(DATA_DIR))
 
     def test_parse_esi_extracts_digit_from_json(self):
         """
@@ -207,7 +188,7 @@ class TestBuildPromptOutput(unittest.TestCase):
     def _make_vignette(self, **overrides) -> dict:
         """Minimal vignette dict matching dataset_quintets.csv schema."""
         base = {
-            "stay_id": 99999999,
+            "source_stay_id": 99999999,
             "quintet_id": 0,
             "chiefcomplaint": "chest pain",
             "heartrate": 88,
@@ -251,7 +232,7 @@ class TestBuildPromptOutput(unittest.TestCase):
 
     def test_female_has_demographic_tokens(self):
         """
-        Female variant must contain Sex: Female, a female name, and she/her pronouns.
+        Female variant must contain Sex: Female.
         """
         from yentlbench.local_runner.prompt import build_prompt
 
@@ -263,14 +244,14 @@ class TestBuildPromptOutput(unittest.TestCase):
         )
         prompt = build_prompt(vignette, "female")
 
-        self.assertIn("Name: Sarah", prompt)
         self.assertIn("Sex: Female", prompt)
-        self.assertIn("Pronouns: she/her", prompt)
+        self.assertNotIn("Name:", prompt)
+        self.assertNotIn("Pronouns:", prompt)
         self.assertIn("chest pain", prompt.lower())
         print(f"\n  female prompt:\n{prompt}")
 
     def test_male_has_demographic_tokens(self):
-        """Male variant must contain Sex: Male, a male name, and he/him pronouns."""
+        """Male variant must contain Sex: Male."""
         from yentlbench.local_runner.prompt import build_prompt
 
         vignette = self._make_vignette(
@@ -281,14 +262,14 @@ class TestBuildPromptOutput(unittest.TestCase):
         )
         prompt = build_prompt(vignette, "male")
 
-        self.assertIn("Name: James", prompt)
+        self.assertNotIn("Name: James", prompt)
         self.assertIn("Sex: Male", prompt)
-        self.assertIn("Pronouns: he/him", prompt)
+        self.assertNotIn("Pronouns: he/him", prompt)
         print(f"\n  male prompt:\n{prompt}")
 
     def test_nb_label_only_has_label_no_pronouns(self):
         """
-        nb_label_only: Sex: Non-binary present, no pronouns, male name pool.
+        nb_label_only: Sex: Non-binary present.
         This is the minimal non-binary signal — label only.
         """
         from yentlbench.local_runner.prompt import build_prompt
@@ -301,7 +282,7 @@ class TestBuildPromptOutput(unittest.TestCase):
         )
         prompt = build_prompt(vignette, "nb_label_only")
 
-        self.assertIn("Name: Robert", prompt)
+        self.assertNotIn("Name: Robert", prompt)
         self.assertIn("Sex: Non-binary", prompt)
         self.assertNotIn("Pronouns:", prompt)
         print(f"\n  nb_label_only prompt:\n{prompt}")
@@ -352,7 +333,7 @@ class TestBuildPromptOutput(unittest.TestCase):
 
         # Base clinical vignette
         clinical = dict(
-            stay_id=99999999,
+            source_stay_id=99999999,
             quintet_id=0,
             chiefcomplaint="chest pain",
             heartrate=88,
@@ -409,7 +390,7 @@ class TestQuintetsCSVContract(unittest.TestCase):
     def test_expected_columns_present(self):
         """All columns YentlGuard depends on must be present."""
         required = [
-            "stay_id", "quintet_id", "gender_variant",
+            "source_stay_id", "quintet_id", "gender_variant",
             "chiefcomplaint", "heartrate", "resprate",
             "o2sat", "sbp", "dbp", "acuity",
             "patient_name", "sex_label", "pronoun",
@@ -550,7 +531,7 @@ class TestYentlGuardIntegrationContract(unittest.TestCase):
             vignette_dict = row.to_dict()
             text = build_prompt(vignette_dict, variant)
             esi_ground_truth = str(int(vignette_dict["acuity"]))
-            vignette_id = str(vignette_dict["stay_id"])
+            vignette_id = str(vignette_dict["source_stay_id"])
             runner.run(vignette_id, text, variant)
     """
 
@@ -563,7 +544,7 @@ class TestYentlGuardIntegrationContract(unittest.TestCase):
 
         # Simulate a row from dataset_quintets.csv
         row = {
-            "stay_id": 30804581,
+            "source_stay_id": 30804581,
             "quintet_id": 1,
             "gender_variant": "female",
             "patient_name": "Jennifer",
@@ -581,7 +562,7 @@ class TestYentlGuardIntegrationContract(unittest.TestCase):
         }
 
         # Fields YentlGuard extracts
-        vignette_id = str(row["stay_id"])
+        vignette_id = str(row["source_stay_id"])
         text = build_prompt(row, row["gender_variant"])
         esi_ground_truth = str(int(row["acuity"]))
         clinical_category = row.get("chiefcomplaint", "unknown")

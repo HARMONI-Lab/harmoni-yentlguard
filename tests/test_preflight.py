@@ -38,7 +38,9 @@ import time
 import uuid
 import unittest
 import warnings
-
+import sys, pathlib
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+from conftest import _find_quintets_csv
 import pytest
 
 # ── Configuration ─────────────────────────────────────────────────────────────
@@ -65,17 +67,40 @@ def _load_config():
 
 
 def _load_vignettes(variant: str, n: int):
-    """Load n vignettes from YentlBench. Skip if YentlBench not installed."""
+    """Load n vignettes from YentlBench. Skip if dataset not found."""
+    import os
+    import pathlib
+    import pandas as pd
     try:
-        from yentlbench.data import load_vignettes
-        vignettes = load_vignettes(variant=variant)
-        if not vignettes:
-            pytest.skip(f"YentlBench returned no vignettes for variant={variant}")
-        return vignettes[:n]
+        from yentlbench.local_runner.prompt import build_prompt
     except ImportError:
         pytest.skip("YentlBench not installed. Run: pip install yentlbench")
-    except Exception as e:
-        pytest.skip(f"YentlBench load failed: {e}")
+
+    dataset_path = pathlib.Path(
+        os.environ.get("YENTLGUARD_DATASET_PATH", "dataset_output/dataset_quintets.csv")
+    )
+    if not dataset_path.exists():
+        pytest.skip(
+            f"dataset_quintets.csv not found at {dataset_path}. "
+            "Run: yentlbench prepare"
+        )
+
+    df = pd.read_csv(dataset_path)
+    df = df[df["acuity"].notna() & (df["gender_variant"] == variant)]
+
+    vignettes = []
+    for _, row in df.head(n).iterrows():
+        vignette_dict = row.to_dict()
+        obj = type("Vignette", (), {
+            "vignette_id": str(int(vignette_dict["source_stay_id"])),
+            "text": build_prompt(vignette_dict, variant),
+            "_row": vignette_dict,
+        })()
+        vignettes.append(obj)
+
+    if not vignettes:
+        pytest.skip(f"No vignettes found for variant={variant}")
+    return vignettes
 
 
 def _make_vertex_client(project: str, location: str):
@@ -239,43 +264,48 @@ class TestYentlBenchData(unittest.TestCase):
                 f"Vignette {v.vignette_id} text is suspiciously short: {repr(v.text)}")
 
     def test_all_five_variants_load(self):
-        """All five YentlBench demographic variants must be loadable."""
-        variants = ["nb_ambiguous", "male", "female", "nb_label_only", "nb_explicit"]
-        try:
-            from yentlbench.data import load_vignettes
-        except ImportError:
-            self.skipTest("YentlBench not installed")
-
-        for variant in variants:
+        """All four YentlGuard variants must have rows in dataset_quintets.csv."""
+        from yentlbench.config import ALL_VARIANTS
+        dataset_path = _find_quintets_csv()
+        if dataset_path is None:
+            self.skipTest("dataset_quintets.csv not found")
+        import pandas as pd
+        df = pd.read_csv(dataset_path)
+        for variant in ALL_VARIANTS:
             with self.subTest(variant=variant):
-                vignettes = load_vignettes(variant=variant)
-                self.assertGreater(
-                    len(vignettes), 0,
-                    f"No vignettes returned for variant={variant}"
-                )
+                count = len(df[df["gender_variant"] == variant])
+                self.assertGreater(count, 0,
+                    f"No rows for variant={variant} in dataset_quintets.csv")
 
     def test_vignettes_contain_demographic_signal(self):
         """
-        Female vignettes must contain a demographic signal token.
-        nb_ambiguous vignettes must not contain explicit sex/gender tokens.
-        This catches YentlBench perturbation bugs before a full run.
+        Female prompts must contain a demographic signal token.
+        nb_ambiguous prompts must not.
         """
-        try:
-            from yentlbench.data import load_vignettes
-        except ImportError:
-            self.skipTest("YentlBench not installed")
+        from yentlbench.local_runner.prompt import build_prompt
+        dataset_path = _find_quintets_csv()
+        if dataset_path is None:
+            self.skipTest("dataset_quintets.csv not found")
+        import pandas as pd
+        df = pd.read_csv(dataset_path)
 
-        female_vignettes = load_vignettes(variant="female")[:3]
         female_tokens = {"female", "woman", "she", "her"}
-        for v in female_vignettes:
-            text_lower = v.text.lower()
-            has_token = any(t in text_lower for t in female_tokens)
-            self.assertTrue(
-                has_token,
-                f"Female vignette {v.vignette_id} contains no female demographic token. "
-                f"Text snippet: {v.text[:200]}"
-            )
+        for _, row in df[df["gender_variant"] == "female"].head(3).iterrows():
+            prompt = build_prompt(row.to_dict(), "female").lower()
+            has_token = any(t in prompt for t in female_tokens)
+            self.assertTrue(has_token,
+                f"Female prompt for source_stay_id={row['source_stay_id']} "
+                f"contains no demographic token. Snippet: {prompt[:200]}")
 
+        for _, row in df[df["gender_variant"] == "nb_ambiguous"].head(3).iterrows():
+            prompt = build_prompt(row.to_dict(), "nb_ambiguous").lower()
+            # Sex: nan is acceptable — it carries no demographic signal
+            # Sex: female / male / non-binary would be a bug
+            for bad_token in {"sex: female", "sex: male", "sex: non-binary"}:
+                self.assertNotIn(bad_token, prompt,
+                    f"nb_ambiguous prompt for source_stay_id={row['source_stay_id']} "
+                    f"contains explicit sex label '{bad_token}' — demographic signal should be absent.")
+    
     def test_preflight_subset_vs_full(self):
         """
         Pre-flight uses {PREFLIGHT_N} vignettes; full run uses all available.

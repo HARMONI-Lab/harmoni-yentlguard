@@ -13,6 +13,7 @@ resolves cleanly without hitting the real packages.
 
 import sys
 import types
+import pathlib
 from unittest.mock import MagicMock
 
 
@@ -132,3 +133,28 @@ _vai.init = MagicMock()
 _vai_eval = sys.modules["vertexai.preview.evaluation"]
 _vai_eval.EvalTask = MagicMock()
 _vai_eval.PointwiseMetric = MagicMock()
+
+
+def _find_quintets_csv() -> pathlib.Path | None:
+    """
+    Locate dataset_quintets.csv. Checks:
+    1. YENTLGUARD_DATASET_PATH env var
+    2. ./dataset_output/dataset_quintets.csv (YentlBench default)
+    3. ./dataset_quintets.csv (flat layout)
+    """
+    import os  # add this
+    env = os.environ.get("YENTLGUARD_DATASET_PATH")
+    if env:
+        p = pathlib.Path(env)
+        if p.exists():
+            return p
+
+    candidates = [
+        pathlib.Path("dataset_output/dataset_quintets.csv"),
+        pathlib.Path("dataset_quintets.csv"),
+        pathlib.Path("../dataset_output/dataset_quintets.csv"),
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    return None

@@ -78,7 +78,7 @@ def cmd_baseline(args: argparse.Namespace) -> None:
 
     for _, row in df_variant.iterrows():
         vignette = row.to_dict()
-        vignette_id = str(int(vignette["stay_id"]))
+        vignette_id = str(int(vignette["source_stay_id"]))
         text = _build_prompt(vignette, "nb_ambiguous")
         run = runner.run(
             vignette_id=vignette_id,
@@ -160,7 +160,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                 )
                 for _, row in vignettes_df.iterrows():
                     vignette = row.to_dict()
-                    vignette_id = str(int(vignette["stay_id"]))
+                    vignette_id = str(int(vignette["source_stay_id"]))
                     text = _build_prompt(vignette, variant)
                     esi_gt = str(int(vignette["acuity"])) if not _pd.isna(vignette.get("acuity")) else None
                     clinical_cat = str(vignette.get("chiefcomplaint", "")) or None

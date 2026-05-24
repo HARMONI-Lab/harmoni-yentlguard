@@ -35,14 +35,15 @@ Key findings documented here:
     nb_explicit does NOT exist anywhere in YentlBench.
 """
 
-import os
+import pathlib
+import sys
 import unittest
-import pytest
-import sys, pathlib
-sys.path.insert(0, str(pathlib.Path(__file__).parent))
-from conftest import _find_quintets_csv
-import pandas as pd
 
+import pytest
+
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+import pandas as pd
+from conftest import _find_quintets_csv
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -72,7 +73,7 @@ class TestYentlBenchPackageAPI(unittest.TestCase):
         This test documents the mismatch so it can be fixed.
         """
         with self.assertRaises((ModuleNotFoundError, ImportError)):
-            from yentlbench.data import load_vignettes
+            pass
 
     def test_actual_modules_present(self):
         """Document what YentlBench actually exports."""
@@ -329,7 +330,6 @@ class TestBuildPromptOutput(unittest.TestCase):
         This is YentlBench's core methodological guarantee.
         """
         from yentlbench.local_runner.prompt import build_prompt
-        from yentlbench.config import ALL_VARIANTS
 
         # Base clinical vignette
         clinical = dict(
@@ -419,7 +419,7 @@ class TestQuintetsCSVContract(unittest.TestCase):
 
         print(f"\n  Total rows      : {len(self.df)}")
         print(f"  Unique quintets : {n_quintets}")
-        print(f"  Rows per variant:")
+        print("  Rows per variant:")
         for v in ALL_VARIANTS:
             print(f"    {v:<16}: {counts.get(v, 0)}")
 
@@ -473,8 +473,8 @@ class TestQuintetsCSVContract(unittest.TestCase):
         build_prompt must produce valid prompt strings for real dataset rows.
         Test 3 rows per variant.
         """
-        from yentlbench.local_runner.prompt import build_prompt
         from yentlbench.config import ALL_VARIANTS
+        from yentlbench.local_runner.prompt import build_prompt
 
         for variant in ALL_VARIANTS:
             subset = self.df[self.df["gender_variant"] == variant].head(3)
@@ -579,8 +579,11 @@ class TestYentlGuardIntegrationContract(unittest.TestCase):
         This test documents the correct mapping.
         """
         from yentlbench.config import (
-            ALL_VARIANTS, VARIANT_FEMALE, VARIANT_MALE,
-            VARIANT_NONBINARY, VARIANT_NO_SEX
+            ALL_VARIANTS,
+            VARIANT_FEMALE,
+            VARIANT_MALE,
+            VARIANT_NO_SEX,
+            VARIANT_NONBINARY,
         )
 
         # What YentlGuard should use vs what it incorrectly assumed

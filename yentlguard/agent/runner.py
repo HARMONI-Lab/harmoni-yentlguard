@@ -37,22 +37,20 @@ from dataclasses import dataclass, field
 
 from google import genai
 from google.genai import types
-
 from opentelemetry import trace as otel_trace
 
-from yentlguard.config import GCP_PROJECT_ID, GCP_LOCATION
-
-from yentlguard.metrics.delta_m import compute_delta_m, DeltaMResult
-from yentlguard.metrics.tar import compute_tar, TARResult
-from yentlguard.metrics.crr import compute_crr, CRRResult
+from yentlguard.config import GCP_LOCATION, GCP_PROJECT_ID
 from yentlguard.mcp.phoenix_client import PhoenixMCPClient
+from yentlguard.metrics.crr import CRRResult, compute_crr
+from yentlguard.metrics.delta_m import DeltaMResult, compute_delta_m
+from yentlguard.metrics.tar import TARResult, compute_tar
 from yentlguard.telemetry.annotation import (
-    vignette_trace,
-    pass_metrics_span,
     correction_gate_span,
-    mcp_lookup_span,
     crr_span,
     enrich_generation_span,
+    mcp_lookup_span,
+    pass_metrics_span,
+    vignette_trace,
 )
 
 logger = logging.getLogger(__name__)

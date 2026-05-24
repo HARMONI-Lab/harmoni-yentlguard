@@ -12,8 +12,8 @@ these digits and measure the margin between its logprob and the next-best
 ESI-digit alternative in the top-k list.
 """
 
-import math
 import logging
+import math
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)

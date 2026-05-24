@@ -15,10 +15,11 @@ import logging
 import pathlib
 import uuid
 from datetime import datetime, timezone
+
 from google.cloud import bigquery
 
 from yentlguard.agent.runner import VignetteRun
-from yentlguard.config import GCP_PROJECT_ID, RUNS_TABLE, EXPTS_TABLE
+from yentlguard.config import EXPTS_TABLE, GCP_PROJECT_ID, RUNS_TABLE
 
 logger = logging.getLogger(__name__)
 

@@ -23,14 +23,13 @@ Run this script once to create the dataset and tables:
 from google.cloud import bigquery
 
 from yentlguard.config import (
-    GCP_PROJECT_ID,
     BQ_DATASET_ID,
     BQ_LOCATION,
-    FULL_DATASET,
-    RUNS_TABLE,
     EXPTS_TABLE,
+    FULL_DATASET,
+    GCP_PROJECT_ID,
+    RUNS_TABLE,
 )
-
 
 RUNS_SCHEMA = [
     # ── Experiment keys ────────────────────────────────────────────────────

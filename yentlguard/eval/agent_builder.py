@@ -24,12 +24,11 @@ GCP settings are read from yentlguard/config.py.
 import logging
 import uuid
 from dataclasses import dataclass
-from typing import Any
 
 import pandas as pd
 from google.cloud import bigquery
 
-from yentlguard.config import GCP_PROJECT_ID, GCP_LOCATION, RUNS_TABLE, EXPTS_TABLE
+from yentlguard.config import EXPTS_TABLE, GCP_LOCATION, GCP_PROJECT_ID, RUNS_TABLE
 
 logger = logging.getLogger(__name__)
 

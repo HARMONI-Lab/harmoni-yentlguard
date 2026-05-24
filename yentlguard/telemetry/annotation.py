@@ -42,9 +42,9 @@ from typing import Generator
 from opentelemetry import trace
 from opentelemetry.trace import Span, Status, StatusCode
 
+from yentlguard.metrics.crr import CRRResult
 from yentlguard.metrics.delta_m import DeltaMResult
 from yentlguard.metrics.tar import TARResult
-from yentlguard.metrics.crr import CRRResult
 
 logger = logging.getLogger(__name__)
 

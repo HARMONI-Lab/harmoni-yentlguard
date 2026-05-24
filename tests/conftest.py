@@ -11,10 +11,10 @@ yentlguard/__init__.py → telemetry/phoenix.py → openinference import chain
 resolves cleanly without hitting the real packages.
 """
 
+import os
+import pathlib
 import sys
 import types
-import pathlib
-import os
 from unittest.mock import MagicMock
 
 
@@ -30,7 +30,7 @@ _is_preflight = any("test_preflight.py" in arg for arg in sys.argv)
 
 if not _is_preflight:
     # ── Register all stub modules ─────────────────────────────────────────────────
-    
+
     _STUB_NAMES = [
         # OpenInference
 
@@ -65,30 +65,30 @@ if not _is_preflight:
 
     for _name in _STUB_NAMES:
         _stub(_name)
-    
+
     # ── Attribute stubs required by specific import statements ────────────────────
-    
+
     # openinference.instrumentation.google_genai.GoogleGenAIInstrumentor
     _oi = sys.modules["openinference.instrumentation.google_genai"]
     _oi.GoogleGenAIInstrumentor = MagicMock(return_value=MagicMock())
-    
+
     # opentelemetry.sdk.trace.export.BatchSpanProcessor
     _export = sys.modules["opentelemetry.sdk.trace.export"]
     _export.BatchSpanProcessor = MagicMock()
-    
+
     # opentelemetry.sdk.trace.TracerProvider
     _sdk_trace = sys.modules["opentelemetry.sdk.trace"]
     _sdk_trace.TracerProvider = MagicMock(return_value=MagicMock())
-    
+
     # opentelemetry.sdk.resources.Resource
     _resources = sys.modules["opentelemetry.sdk.resources"]
     _resources.Resource = MagicMock()
     _resources.Resource.create = MagicMock(return_value=MagicMock())
-    
+
     # opentelemetry.exporter.otlp.proto.http.trace_exporter.OTLPSpanExporter
     _otlp = sys.modules["opentelemetry.exporter.otlp.proto.http.trace_exporter"]
     _otlp.OTLPSpanExporter = MagicMock(return_value=MagicMock())
-    
+
     # opentelemetry.trace — tracer, span, status stubs
     _trace = sys.modules["opentelemetry.trace"]
     _trace.get_tracer = MagicMock(return_value=MagicMock())
@@ -98,7 +98,7 @@ if not _is_preflight:
     _trace.StatusCode = MagicMock()
     _trace.Span = MagicMock          # annotation.py imports Span as a type
     _trace.NonRecordingSpan = MagicMock()
-    
+
     # yentlguard.config stub — must be registered before yentlguard submodules import it
     import types as _types
     _cfg = _types.ModuleType("yentlguard.config")
@@ -111,15 +111,15 @@ if not _is_preflight:
     _cfg.BQ_LOCATION    = "US"
     _cfg.validate       = MagicMock()
     sys.modules["yentlguard.config"] = _cfg
-    
+
     # google.genai stubs
     _genai = sys.modules["google.genai"]
     _genai.Client = MagicMock(return_value=MagicMock())
-    
+
     _genai_types = sys.modules["google.genai.types"]
     _genai_types.ThinkingConfig = MagicMock(return_value=MagicMock())
     _genai_types.GenerateContentConfig = MagicMock(return_value=MagicMock())
-    
+
     # google.cloud.bigquery stubs
     _bq = sys.modules["google.cloud.bigquery"]
     _bq.Client = MagicMock(return_value=MagicMock())
@@ -136,7 +136,7 @@ if not _is_preflight:
     # vertexai stubs
     _vai = sys.modules["vertexai"]
     _vai.init = MagicMock()
-    
+
     _vai_eval = sys.modules["vertexai.preview.evaluation"]
     _vai_eval.EvalTask = MagicMock()
     _vai_eval.PointwiseMetric = MagicMock()
@@ -149,7 +149,6 @@ def _find_quintets_csv() -> pathlib.Path | None:
     2. ./dataset_output/dataset_quintets.csv (YentlBench default)
     3. ./dataset_quintets.csv (flat layout)
     """
-    import os  # add this
     env = os.environ.get("YENTLGUARD_DATASET_PATH")
     if env:
         p = pathlib.Path(env)

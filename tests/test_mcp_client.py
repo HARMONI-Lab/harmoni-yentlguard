@@ -13,7 +13,6 @@ Verifies that:
 No live Phoenix server required — all MCP I/O is mocked.
 """
 
-import asyncio
 import json
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -83,8 +82,6 @@ class TestPhoenixClientCallTool(unittest.IsolatedAsyncioTestCase):
         _call_tool must parse TextContent blocks from CallToolResult.content
         into a list of dicts via JSON decode.
         """
-        from mcp.client.sse import sse_client
-        from mcp.client.session import ClientSession
 
         # Build a fake CallToolResult with two TextContent blocks
         span_data_1 = {"attributes": {"yentlguard.delta_m": 2.34, "yentlguard.vignette_id": "ED_001"}}
@@ -124,7 +121,6 @@ class TestPhoenixClientCallTool(unittest.IsolatedAsyncioTestCase):
         If a TextContent block contains non-JSON text, _call_tool must
         include it as {"raw": text} rather than crashing.
         """
-        from yentlguard.mcp.phoenix_client import PhoenixMCPClient
 
         fake_block = MagicMock()
         fake_block.text = "plain text response"

@@ -8,7 +8,6 @@ Design: dark scientific instrument. Monospace data. Teal/coral accents.
 Dense information layout that screenshots cleanly for papers.
 """
 
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 

@@ -34,14 +34,16 @@ Markers:
 """
 
 import os
+import pathlib
+import sys
 import time
-import uuid
 import unittest
+import uuid
 import warnings
-import sys, pathlib
+
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-from conftest import _find_quintets_csv
 import pytest
+from conftest import _find_quintets_csv
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -59,7 +61,7 @@ VERTEX_TIMEOUT = 60
 def _load_config():
     """Load and validate GCP config. Skip test if placeholders unfilled."""
     try:
-        from yentlguard.config import GCP_PROJECT_ID, GCP_LOCATION, BQ_DATASET_ID, validate
+        from yentlguard.config import BQ_DATASET_ID, GCP_LOCATION, GCP_PROJECT_ID, validate
         validate()
         return GCP_PROJECT_ID, GCP_LOCATION, BQ_DATASET_ID
     except RuntimeError as e:
@@ -70,6 +72,7 @@ def _load_vignettes(variant: str, n: int):
     """Load n vignettes from YentlBench. Skip if dataset not found."""
     import os
     import pathlib
+
     import pandas as pd
     try:
         from yentlbench.local_runner.prompt import build_prompt
@@ -305,7 +308,7 @@ class TestYentlBenchData(unittest.TestCase):
                 self.assertNotIn(bad_token, prompt,
                     f"nb_ambiguous prompt for source_stay_id={row['source_stay_id']} "
                     f"contains explicit sex label '{bad_token}' — demographic signal should be absent.")
-    
+
     def test_preflight_subset_vs_full(self):
         """
         Pre-flight uses {PREFLIGHT_N} vignettes; full run uses all available.
@@ -402,6 +405,7 @@ class TestBigQueryConnectivity(unittest.TestCase):
         """runs table must exist. If not, run: python -m yentlguard.eval.schema"""
         try:
             from google.cloud import bigquery
+
             from yentlguard.config import RUNS_TABLE
             client = bigquery.Client(project=self.project)
             table = client.get_table(RUNS_TABLE)
@@ -420,6 +424,7 @@ class TestBigQueryConnectivity(unittest.TestCase):
         """experiments table must exist."""
         try:
             from google.cloud import bigquery
+
             from yentlguard.config import EXPTS_TABLE
             client = bigquery.Client(project=self.project)
             table = client.get_table(EXPTS_TABLE)
@@ -436,9 +441,11 @@ class TestBigQueryConnectivity(unittest.TestCase):
         Uses a clearly-marked preflight run_id so it can be filtered out.
         """
         try:
-            from google.cloud import bigquery
-            from yentlguard.config import RUNS_TABLE
             import datetime
+
+            from google.cloud import bigquery
+
+            from yentlguard.config import RUNS_TABLE
 
             client = bigquery.Client(project=self.project)
             test_row = {
@@ -529,6 +536,7 @@ class TestMetricsOnRealResponse(unittest.TestCase):
 
     def _run_vignette(self, vignette_text: str):
         from google.genai import types
+
         from yentlguard.metrics.delta_m import compute_delta_m
         from yentlguard.metrics.tar import compute_tar
 

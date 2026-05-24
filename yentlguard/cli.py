@@ -33,7 +33,6 @@ Usage:
 
 import argparse
 import logging
-import sys
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,8 +43,8 @@ logger = logging.getLogger("yentlguard.cli")
 
 def cmd_baseline(args: argparse.Namespace) -> None:
     """Populate Phoenix with nb_ambiguous baseline spans."""
-    from yentlguard.telemetry.phoenix import setup_phoenix_tracing
     from yentlguard.agent.runner import YentlGuardRunner
+    from yentlguard.telemetry.phoenix import setup_phoenix_tracing
 
     logger.info("Initializing Phoenix tracing...")
     provider = setup_phoenix_tracing()
@@ -58,10 +57,12 @@ def cmd_baseline(args: argparse.Namespace) -> None:
 
     # Load vignettes from YentlBench prepared CSV
     import pathlib as _pathlib
-    import pandas as _pd
     import uuid as _uuid
-    from yentlguard.eval.bq_writer import BQWriter
+
+    import pandas as _pd
     from yentlbench.local_runner.prompt import build_prompt as _build_prompt
+
+    from yentlguard.eval.bq_writer import BQWriter
 
     dataset_path = _pathlib.Path(args.dataset)
     if not dataset_path.exists():
@@ -101,7 +102,7 @@ def cmd_baseline(args: argparse.Namespace) -> None:
                 vignette_text=text,
                 demographic_variant="nb_ambiguous",
             )
-            
+
             # Record to BQ
             esi_gt = str(int(vignette["acuity"])) if not _pd.isna(vignette.get("acuity")) else None
             cat = str(vignette.get("chiefcomplaint", "")) or None
@@ -124,10 +125,11 @@ def cmd_baseline(args: argparse.Namespace) -> None:
 def cmd_run(args: argparse.Namespace) -> None:
     """Execute two-pass mechanistic runs for specified variants."""
     import uuid
-    from yentlguard.telemetry.phoenix import setup_phoenix_tracing
+
     from yentlguard.agent.runner import YentlGuardRunner
-    from yentlguard.mcp.phoenix_client import PhoenixMCPClient
     from yentlguard.eval.bq_writer import BQWriter
+    from yentlguard.mcp.phoenix_client import PhoenixMCPClient
+    from yentlguard.telemetry.phoenix import setup_phoenix_tracing
 
     provider = setup_phoenix_tracing()
 
@@ -137,6 +139,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     logger.info("Experiment run_id: %s", run_id)
 
     import pathlib as _pathlib
+
     import pandas as _pd
     from yentlbench.local_runner.prompt import build_prompt as _build_prompt
 
@@ -231,12 +234,12 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     Pull completed run data from BigQuery, compute all summary statistics,
     and write a self-contained HTML report + CSV files to the output directory.
     """
-    from pathlib import Path
     from datetime import datetime, timezone
+    from pathlib import Path
 
     from yentlguard.eval.analyze import Analyzer
-    from yentlguard.eval.report import generate_html_report
     from yentlguard.eval.export import export_csvs
+    from yentlguard.eval.report import generate_html_report
 
     run_ids: list[str] = args.run_ids
     output_path = Path(args.output)

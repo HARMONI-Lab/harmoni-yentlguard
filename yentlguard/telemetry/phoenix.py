@@ -6,12 +6,13 @@ every Gemini API call — including full response metadata (logprobs,
 thoughts_token_count, safety_ratings) — streams into Phoenix as OTel spans.
 """
 
-import os
 import logging
+import os
+
 from openinference.instrumentation.google_genai import GoogleGenAIInstrumentor
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk import trace as trace_sdk
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
 logger = logging.getLogger(__name__)
 

@@ -12,14 +12,12 @@ Uses a mocked Vertex AI client — no live GCP credentials required.
 
 import asyncio
 import inspect
-import types
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 # Stubs for external dependencies are installed by conftest.py
-
 # ── Now import the runner ─────────────────────────────────────────────────────
-from yentlguard.agent.runner import YentlGuardRunner, VignetteRun
+from yentlguard.agent.runner import VignetteRun, YentlGuardRunner
 
 
 def _make_mock_response(esi_text: str = "ESI: 3\nRationale: Normal vitals.") -> MagicMock:

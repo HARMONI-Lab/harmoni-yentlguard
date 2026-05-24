@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 import pandas as pd
 from google.cloud import bigquery
 
-from yentlguard.config import GCP_PROJECT_ID, RUNS_TABLE, EXPTS_TABLE
+from yentlguard.config import EXPTS_TABLE, GCP_PROJECT_ID, RUNS_TABLE
 
 logger = logging.getLogger(__name__)
 

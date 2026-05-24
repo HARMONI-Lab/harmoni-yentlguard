@@ -15,8 +15,8 @@ import asyncio
 import json
 import logging
 
-from mcp.client.sse import sse_client
 from mcp.client.session import ClientSession
+from mcp.client.sse import sse_client
 
 logger = logging.getLogger(__name__)
 
@@ -120,9 +120,14 @@ class PhoenixMCPClient:
         except RuntimeError:
             raise
         except Exception as e:
+            # Unpack ExceptionGroup for Python 3.11+ to surface root causes (e.g. ConnectError)
+            if hasattr(e, "exceptions"):
+                root_error = e.exceptions[0] if e.exceptions else e
+            else:
+                root_error = e
             raise RuntimeError(
                 f"PhoenixMCPClient baseline lookup failed for "
-                f"{vignette_id}/{variant}: {e}"
+                f"{vignette_id}/{variant}: {root_error}"
             ) from e
 
         if not spans:
@@ -177,6 +182,11 @@ class PhoenixMCPClient:
         except RuntimeError:
             raise
         except Exception as e:
+            # Unpack ExceptionGroup for Python 3.11+ to surface root causes (e.g. ConnectError)
+            if hasattr(e, "exceptions"):
+                root_error = e.exceptions[0] if e.exceptions else e
+            else:
+                root_error = e
             raise RuntimeError(
-                f"PhoenixMCPClient span history query failed for {vignette_id}: {e}"
+                f"PhoenixMCPClient span history query failed for {vignette_id}: {root_error}"
             ) from e

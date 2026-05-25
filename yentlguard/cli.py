@@ -18,17 +18,17 @@ Usage:
 
     yentlguard run \\
         --model gemini-2.5-pro --budget medium \\
-        --variants female nb_label_only \\
+        --variants male female nb_label_only \\
         --label "gemini-2.5 baseline May 2026"
 
     yentlguard run \\
         --model gemini-3.1-pro --budget low medium high \\
-        --variants female nb_label_only
+        --variants male female nb_label_only
 
-    yentlguard analyze \\
-        --run-ids <run_id_1> <run_id_2> \\
-        --output results/ \\
-        --register-eval
+yentlguard analyze \\
+    --run-ids <run_id_1> <run_id_2> \\
+    --output results/ \\
+    --register-eval
 """
 
 import argparse
@@ -391,7 +391,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_run.add_argument(
         "--variants", nargs="+",
-        default=["female", "nb_label_only"],
+        default=["male", "female", "nb_label_only"],
         choices=["male", "female", "nb_ambiguous", "nb_label_only"],
     )
     p_run.add_argument(

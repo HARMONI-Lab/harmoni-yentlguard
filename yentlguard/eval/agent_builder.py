@@ -68,7 +68,7 @@ ORDER BY v.vignette_id, v.model_version, v.thinking_budget, v.demographic_varian
 
 PSS_QUERY = """
 -- Perturbation Sensitivity Score per model × thinking_budget × clinical_category
--- PSS = mean absolute delta_m drop from nb_ambiguous baseline across female/nb variants
+-- PSS = mean absolute delta_m drop from nb_ambiguous baseline across male, female/nb variants
 SELECT
     model_version,
     model_family,
@@ -108,7 +108,7 @@ SELECT
 FROM `{runs_table}`
 WHERE run_id IN UNNEST(@run_ids)
   AND pass_number = 1
-  AND demographic_variant IN ('female', 'nb_label_only', 'nb_explicit')
+   AND demographic_variant IN ('male', 'female', 'nb_label_only', 'nb_explicit')
 GROUP BY 1, 2, 3
 ORDER BY model_version, thinking_budget, demographic_variant
 """.strip()

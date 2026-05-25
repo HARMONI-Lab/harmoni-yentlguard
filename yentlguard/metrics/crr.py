@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class CRRResult:
     vignette_id: str
-    demographic_variant: str          # e.g., "female", "nb_label_only"
+    demographic_variant: str          # e.g., "male", "female", "nb_label_only"
     delta_m_baseline: float           # nb_ambiguous trace for this vignette_id
     delta_m_pass1: float              # degraded confidence under demographic token
     delta_m_pass2: float              # after corrective re-prompt
@@ -71,7 +71,7 @@ def compute_crr(
         YentlBench vignette identifier (e.g., "ED_00147").
     demographic_variant:
         The demographic condition that triggered intervention
-        ("female", "nb_label_only", "nb_ambiguous", "nb_explicit").
+        ("male", "female", "nb_label_only", "nb_ambiguous", "nb_explicit").
     delta_m_baseline:
         ΔM from the nb_ambiguous trace in Phoenix history for this vignette.
     delta_m_pass1:

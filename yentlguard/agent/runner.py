@@ -56,7 +56,7 @@ from yentlguard.telemetry.annotation import (
 logger = logging.getLogger(__name__)
 
 # Demographic tokens that trigger the correction gate
-DEMOGRAPHIC_TRIGGER_TOKENS = {"female", "woman", "girl", "she/her", "nb_label_only", "nb_explicit"}
+DEMOGRAPHIC_TRIGGER_TOKENS = {"female", "woman", "girl", "she/her", "male", "man", "boy", "he/him", "nb_label_only", "nb_explicit"}
 
 
 @dataclass

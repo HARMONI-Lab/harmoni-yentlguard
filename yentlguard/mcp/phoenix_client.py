@@ -42,13 +42,13 @@ class PhoenixMCPClient:
         model_version: str | None = None,
     ) -> float:
         """Retrieve the mean ΔM from BigQuery."""
-        query = f\"\"\"
+        query = f"""
             SELECT AVG(delta_m) as avg_dm
             FROM `{RUNS_TABLE}`
             WHERE vignette_id = @vignette_id
               AND demographic_variant = @variant
               AND pass_number = 1
-        \"\"\"
+        """
         
         query_params = [
             bigquery.ScalarQueryParameter("vignette_id", "STRING", str(vignette_id)),

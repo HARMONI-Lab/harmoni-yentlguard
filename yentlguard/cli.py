@@ -23,7 +23,7 @@ Usage:
 
     yentlguard run \\
         --model gemini-3.1-pro --budget low medium high \\
-        --variants female nb_label_only nb_explicit
+        --variants female nb_label_only
 
     yentlguard analyze \\
         --run-ids <run_id_1> <run_id_2> \\
@@ -40,6 +40,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("yentlguard.cli")
 
+# Default Phoenix MCP endpoint — space-scoped cloud URL.
+# Override with --phoenix-mcp-endpoint for a different space or local Phoenix.
+_DEFAULT_PHOENIX_MCP_ENDPOINT = "https://app.phoenix.arize.com/s/yentlguard/mcp/sse"
+
 
 def cmd_baseline(args: argparse.Namespace) -> None:
     """Populate Phoenix with nb_ambiguous baseline spans."""
@@ -55,7 +59,6 @@ def cmd_baseline(args: argparse.Namespace) -> None:
         phoenix_mcp_client=None,  # baseline pass: no MCP lookup needed
     )
 
-    # Load vignettes from YentlBench prepared CSV
     import pathlib as _pathlib
     import uuid as _uuid
 
@@ -66,7 +69,6 @@ def cmd_baseline(args: argparse.Namespace) -> None:
 
     dataset_path = _pathlib.Path(args.dataset)
     if not dataset_path.exists():
-
         logger.error(
             "Dataset not found: %s\n"
             "Run: yentlbench prepare  (requires MIMIC-IV-ED data)\n"
@@ -103,7 +105,6 @@ def cmd_baseline(args: argparse.Namespace) -> None:
                 demographic_variant="nb_ambiguous",
             )
 
-            # Record to BQ
             esi_gt = str(int(vignette["acuity"])) if not _pd.isna(vignette.get("acuity")) else None
             cat = str(vignette.get("chiefcomplaint", "")) or None
             bq.write(run=run, esi_ground_truth=esi_gt, clinical_category=cat)
@@ -134,6 +135,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     provider = setup_phoenix_tracing()
 
     mcp_client = PhoenixMCPClient(mcp_endpoint=args.phoenix_mcp_endpoint)
+    logger.info("Phoenix MCP endpoint: %s", args.phoenix_mcp_endpoint)
 
     run_id = args.run_id or str(uuid.uuid4())
     logger.info("Experiment run_id: %s", run_id)
@@ -156,7 +158,6 @@ def cmd_run(args: argparse.Namespace) -> None:
     df_all = _pd.read_csv(dataset_path)
     df_all = df_all[df_all["acuity"].notna()]
 
-    # Use first variant for experiment registration count
     n_per_variant = len(df_all[df_all["gender_variant"] == args.variants[0]])
 
     with BQWriter(run_id=run_id, gate_threshold=args.threshold) as bq:
@@ -263,7 +264,6 @@ def cmd_analyze(args: argparse.Namespace) -> None:
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
-    # ── HTML report ────────────────────────────────────────────────────────
     logger.info("Generating HTML report...")
     html_path = generate_html_report(
         result=result,
@@ -272,7 +272,6 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     )
     logger.info("HTML report: %s", html_path)
 
-    # ── CSV export ─────────────────────────────────────────────────────────
     logger.info("Exporting CSVs...")
     csv_files = export_csvs(
         result=result,
@@ -281,7 +280,6 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     )
     logger.info("Wrote %d CSV files to %s", len(csv_files), output_path)
 
-    # ── Agent Builder eval task (optional) ────────────────────────────────
     if args.register_eval:
         from yentlguard.eval.agent_builder import AgentBuilderEvalLayer
         logger.info("Registering Agent Builder eval task...")
@@ -302,7 +300,6 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         except Exception as e:
             logger.warning("Agent Builder registration failed (non-fatal): %s", e)
 
-    # ── Summary to terminal ────────────────────────────────────────────────
     print("\n" + "─" * 60)
     print("  YentlGuard Analysis Complete")
     print("─" * 60)
@@ -349,7 +346,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument(
         "--variants", nargs="+",
         default=["female", "nb_label_only"],
-        # nb_explicit does not exist in YentlBench — valid variants are these four:
         choices=["male", "female", "nb_ambiguous", "nb_label_only"],
     )
     p_run.add_argument(
@@ -362,8 +358,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="ΔM threshold below which correction gate fires (default: 1.0 nat).",
     )
     p_run.add_argument(
-        "--phoenix-mcp-endpoint", default="http://localhost:6006/mcp",
-        help="Phoenix MCP server URL for baseline ΔM lookup.",
+        "--phoenix-mcp-endpoint",
+        default=_DEFAULT_PHOENIX_MCP_ENDPOINT,
+        help=(
+            "Phoenix MCP server SSE URL. "
+            "Cloud default: https://app.phoenix.arize.com/s/yentlguard/mcp/sse "
+            "Local Phoenix: http://localhost:6006/mcp/sse"
+        ),
     )
     p_run.add_argument(
         "--run-id", default=None,
@@ -425,7 +426,6 @@ def main() -> None:
     from yentlguard.config import validate
     parser = build_parser()
     args = parser.parse_args()
-    # Validate GCP config early — fails with a clear message before any API call
     if args.command in ("run", "baseline", "analyze", "report"):
         try:
             validate()

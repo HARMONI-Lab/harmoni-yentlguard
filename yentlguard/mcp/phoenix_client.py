@@ -14,6 +14,7 @@ Uses the correct mcp>=1.0.0 transport pattern:
 import asyncio
 import json
 import logging
+import os
 
 from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
@@ -31,18 +32,30 @@ class PhoenixMCPClient:
     Parameters
     ----------
     mcp_endpoint:
-        Phoenix MCP server SSE URL, e.g. "http://localhost:6006/mcp/sse".
+        Phoenix MCP server SSE URL.
+        For cloud Phoenix: https://app.phoenix.arize.com/s/<space>/mcp/sse
+        For local Phoenix: http://localhost:6006/mcp/sse
     project_name:
         Phoenix project to scope queries to (default: "yentlguard").
+    api_key:
+        Phoenix API key. Falls back to PHOENIX_API_KEY env var.
     """
 
     def __init__(
         self,
         mcp_endpoint: str,
         project_name: str = "yentlguard",
+        api_key: str | None = None,
     ):
         self.mcp_endpoint = mcp_endpoint
         self.project_name = project_name
+        self._api_key = api_key or os.environ.get("PHOENIX_API_KEY")
+
+    def _auth_headers(self) -> dict:
+        """Build auth headers for the SSE transport."""
+        if self._api_key:
+            return {"Authorization": f"Bearer {self._api_key}"}
+        return {}
 
     # ── Internal async helpers ─────────────────────────────────────────────────
 
@@ -53,7 +66,7 @@ class PhoenixMCPClient:
 
         Raises RuntimeError on timeout or transport failure.
         """
-        async with sse_client(self.mcp_endpoint) as (read_stream, write_stream):
+        async with sse_client(self.mcp_endpoint, headers=self._auth_headers()) as (read_stream, write_stream):
             async with ClientSession(read_stream, write_stream) as session:
                 await session.initialize()
                 result = await session.call_tool(tool_name, arguments=arguments)

@@ -33,6 +33,8 @@ Usage:
 
 import argparse
 import logging
+import os
+import yentlguard.config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,9 +42,37 @@ logging.basicConfig(
 )
 logger = logging.getLogger("yentlguard.cli")
 
-# Default Phoenix MCP endpoint — space-scoped cloud URL.
+# Default Phoenix MCP endpoint — space-scoped cloud URL or base URL
 # Override with --phoenix-mcp-endpoint for a different space or local Phoenix.
-_DEFAULT_PHOENIX_MCP_ENDPOINT = "https://app.phoenix.arize.com/s/yentlguard/mcp/sse"
+_DEFAULT_PHOENIX_MCP_ENDPOINT = "https://app.phoenix.arize.com"
+
+
+
+def _get_completed_vignettes(model: str, budget: str, variant: str) -> set[str]:
+    from google.cloud import bigquery
+    from yentlguard.config import RUNS_TABLE, GCP_PROJECT_ID
+    client = bigquery.Client(project=GCP_PROJECT_ID)
+    query = f"""
+        SELECT DISTINCT vignette_id
+        FROM `{RUNS_TABLE}`
+        WHERE model_version = @model
+          AND thinking_budget = @budget
+          AND demographic_variant = @variant
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("model", "STRING", model),
+            bigquery.ScalarQueryParameter("budget", "STRING", budget),
+            bigquery.ScalarQueryParameter("variant", "STRING", variant),
+        ]
+    )
+    try:
+        df = client.query(query, job_config=job_config).to_dataframe()
+        return set(df["vignette_id"].astype(str).tolist())
+    except Exception as e:
+        import logging
+        logging.getLogger("yentlguard.cli").warning("Failed to check completed vignettes: %s", e)
+        return set()
 
 
 def cmd_baseline(args: argparse.Namespace) -> None:
@@ -95,9 +125,15 @@ def cmd_baseline(args: argparse.Namespace) -> None:
             notes="Baseline pass for nb_ambiguous",
         )
 
+        completed = _get_completed_vignettes(args.model, args.budget, "nb_ambiguous")
+        if completed:
+            logger.info("Found %d already completed vignettes for %s %s nb_ambiguous. Skipping.", len(completed), args.model, args.budget)
+
         for _, row in df_variant.iterrows():
             vignette = row.to_dict()
             vignette_id = str(int(vignette["source_stay_id"]))
+            if vignette_id in completed:
+                continue
             text = _build_prompt(vignette, "nb_ambiguous")
             run = runner.run(
                 vignette_id=vignette_id,
@@ -181,6 +217,16 @@ def cmd_run(args: argparse.Namespace) -> None:
 
             for variant in args.variants:
                 vignettes_df = df_all[df_all["gender_variant"] == variant]
+                completed = _get_completed_vignettes(args.model, budget, variant)
+                
+                if completed:
+                    vignettes_df = vignettes_df[~vignettes_df["source_stay_id"].astype(int).astype(str).isin(completed)]
+                    logger.info("Skipped %d already completed vignettes.", len(completed))
+                    
+                if vignettes_df.empty:
+                    logger.info("All vignettes already completed for model=%s | budget=%s | variant=%s. Skipping.", args.model, budget, variant)
+                    continue
+
                 logger.info(
                     "Running %d vignettes | model=%s | budget=%s | variant=%s",
                     len(vignettes_df), args.model, budget, variant,
@@ -359,11 +405,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_run.add_argument(
         "--phoenix-mcp-endpoint",
-        default=_DEFAULT_PHOENIX_MCP_ENDPOINT,
+        default=os.environ.get("PHOENIX_MCP_ENDPOINT", _DEFAULT_PHOENIX_MCP_ENDPOINT),
         help=(
-            "Phoenix MCP server SSE URL. "
-            "Cloud default: https://app.phoenix.arize.com/s/yentlguard/mcp/sse "
-            "Local Phoenix: http://localhost:6006/mcp/sse"
+            "Phoenix Base URL. "
+            "Cloud default: https://app.phoenix.arize.com "
+            "Local Phoenix: http://localhost:6006"
         ),
     )
     p_run.add_argument(

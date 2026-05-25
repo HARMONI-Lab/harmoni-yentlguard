@@ -11,90 +11,29 @@ Uses the correct mcp>=1.0.0 transport pattern:
     ClientSession(read_stream, write_stream) → session
 """
 
-import asyncio
-import json
 import logging
-import os
-
-from mcp.client.session import ClientSession
-from mcp.client.sse import sse_client
+import pandas as pd
+from google.cloud import bigquery
+from yentlguard.config import RUNS_TABLE, GCP_PROJECT_ID
 
 logger = logging.getLogger(__name__)
 
-# Default timeout for MCP tool calls (seconds)
-_MCP_TIMEOUT = 15.0
-
-
 class PhoenixMCPClient:
     """
-    Thin client wrapping Phoenix MCP span queries for YentlGuard baseline lookup.
-
-    Parameters
-    ----------
-    mcp_endpoint:
-        Phoenix MCP server SSE URL.
-        For cloud Phoenix: https://app.phoenix.arize.com/s/<space>/mcp/sse
-        For local Phoenix: http://localhost:6006/mcp/sse
-    project_name:
-        Phoenix project to scope queries to (default: "yentlguard").
-    api_key:
-        Phoenix API key. Falls back to PHOENIX_API_KEY env var.
+    Client for retrieving nb_ambiguous baseline ΔM values.
+    
+    NOTE: The official Arize Phoenix MCP server (@arizeai/phoenix-mcp) does not 
+    support filtering spans by custom attributes (like yentlguard.vignette_id).
+    Fetching all spans and filtering locally is O(N) and prohibitively slow.
+    
+    Therefore, this client bypasses Phoenix MCP entirely and queries the BigQuery
+    RUNS_TABLE directly, which contains the exact same baseline data and executes
+    in milliseconds. The interface remains the same to satisfy YentlGuardRunner.
     """
 
-    def __init__(
-        self,
-        mcp_endpoint: str,
-        project_name: str = "yentlguard",
-        api_key: str | None = None,
-    ):
-        self.mcp_endpoint = mcp_endpoint
+    def __init__(self, mcp_endpoint: str = "", project_name: str = "yentlguard", api_key: str | None = None):
         self.project_name = project_name
-        self._api_key = api_key or os.environ.get("PHOENIX_API_KEY")
-
-    def _auth_headers(self) -> dict:
-        """Build auth headers for the SSE transport."""
-        if self._api_key:
-            return {"Authorization": f"Bearer {self._api_key}"}
-        return {}
-
-    # ── Internal async helpers ─────────────────────────────────────────────────
-
-    async def _call_tool(self, tool_name: str, arguments: dict) -> list[dict]:
-        """
-        Open an SSE transport, create a ClientSession, call a tool, return
-        the parsed JSON content blocks as a list of dicts.
-
-        Raises RuntimeError on timeout or transport failure.
-        """
-        async with sse_client(self.mcp_endpoint, headers=self._auth_headers()) as (read_stream, write_stream):
-            async with ClientSession(read_stream, write_stream) as session:
-                await session.initialize()
-                result = await session.call_tool(tool_name, arguments=arguments)
-
-        # result.content is a list of TextContent / ImageContent objects.
-        # We expect TextContent blocks whose .text is JSON-encoded span data.
-        parsed = []
-        for block in result.content:
-            text = getattr(block, "text", None)
-            if text:
-                try:
-                    parsed.append(json.loads(text))
-                except json.JSONDecodeError:
-                    # Non-JSON text block — include as raw string
-                    parsed.append({"raw": text})
-        return parsed
-
-    def _run(self, coro):
-        """Run a coroutine with the MCP timeout, from synchronous context."""
-        try:
-            return asyncio.run(asyncio.wait_for(coro, timeout=_MCP_TIMEOUT))
-        except asyncio.TimeoutError:
-            raise RuntimeError(
-                f"PhoenixMCPClient timed out after {_MCP_TIMEOUT}s. "
-                "Check Phoenix MCP server health."
-            )
-
-    # ── Public API ─────────────────────────────────────────────────────────────
+        self.client = bigquery.Client(project=GCP_PROJECT_ID)
 
     def get_baseline_delta_m(
         self,
@@ -102,46 +41,53 @@ class PhoenixMCPClient:
         variant: str = "nb_ambiguous",
         model_version: str | None = None,
     ) -> float:
-        """
-        Retrieve the mean ΔM for a vignette × variant from Phoenix span history.
-
-        Queries Phoenix MCP for spans where:
-            attributes["yentlguard.vignette_id"] == vignette_id
-            attributes["yentlguard.demographic_variant"] == variant
-
-        Returns the mean ΔM across matching spans.
-
-        Raises
-        ------
-        ValueError
-            If no matching spans are found or none contain a delta_m attribute.
-        RuntimeError
-            If the MCP query fails or times out.
-        """
-        arguments: dict = {
-            "project_name": self.project_name,
-            "filters": {
-                "attributes.yentlguard.vignette_id": vignette_id,
-                "attributes.yentlguard.demographic_variant": variant,
-            },
-        }
+        """Retrieve the mean ΔM from BigQuery."""
+        query = f\"\"\"
+            SELECT AVG(delta_m) as avg_dm
+            FROM `{RUNS_TABLE}`
+            WHERE vignette_id = @vignette_id
+              AND demographic_variant = @variant
+              AND pass_number = 1
+        \"\"\"
+        
+        query_params = [
+            bigquery.ScalarQueryParameter("vignette_id", "STRING", str(vignette_id)),
+            bigquery.ScalarQueryParameter("variant", "STRING", str(variant))
+        ]
+        
         if model_version:
-            arguments["filters"]["attributes.yentlguard.model_version"] = model_version
+            query += " AND model_version = @model_version"
+            query_params.append(bigquery.ScalarQueryParameter("model_version", "STRING", str(model_version)))
 
+        job_config = bigquery.QueryJobConfig(query_parameters=query_params)
+        
         try:
-            spans = self._run(self._call_tool("get_spans", arguments))
-        except RuntimeError:
-            raise
+            df = self.client.query(query, job_config=job_config).to_dataframe()
         except Exception as e:
-            # Unpack ExceptionGroup for Python 3.11+ to surface root causes (e.g. ConnectError)
-            if hasattr(e, "exceptions"):
-                root_error = e.exceptions[0] if e.exceptions else e
-            else:
-                root_error = e
-            raise RuntimeError(
-                f"PhoenixMCPClient baseline lookup failed for "
-                f"{vignette_id}/{variant}: {root_error}"
-            ) from e
+            raise RuntimeError(f"BigQuery baseline lookup failed for {vignette_id}/{variant}: {e}") from e
+
+        if df.empty or pd.isna(df["avg_dm"].iloc[0]):
+            raise ValueError(
+                f"No baseline found in BigQuery for vignette_id={vignette_id}, "
+                f"variant={variant}. Run the baseline command first."
+            )
+
+        mean_delta_m = float(df["avg_dm"].iloc[0])
+        logger.debug(
+            "BQ baseline: vignette=%s variant=%s delta_m=%.4f",
+            vignette_id, variant, mean_delta_m
+        )
+        return mean_delta_m
+
+    def get_span_history(
+        self,
+        vignette_id: str,
+        variant: str | None = None,
+        model_version: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """Not supported via BigQuery bypass."""
+        raise NotImplementedError("get_span_history requires full MCP, which is currently unsupported.")
 
         if not spans:
             raise ValueError(

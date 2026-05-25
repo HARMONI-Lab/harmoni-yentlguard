@@ -53,6 +53,7 @@ dependencies = [
     "google-cloud-bigquery-storage>=2.25.0",   # faster BQ reads via Arrow
     "google-cloud-aiplatform>=1.112.0",
     "pyarrow>=16.0.0",                          # BQ → DataFrame fast path
+    "db-dtypes>=1.1.0",                         # Needed for to_dataframe()
 
     # MCP
     "mcp>=1.0.0",
